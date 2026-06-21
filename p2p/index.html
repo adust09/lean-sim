@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lean Consensus P2P シミュレータ — 第5章</title>
+    <link rel="stylesheet" href="../shared/style.css" />
+  </head>
+  <body>
+    <header id="topbar">
+      <div class="brand">
+        <a class="brand-home" href="../index.html">← トピック一覧</a>
+        <span class="brand-title">Lean Consensus · P2P シミュレータ</span>
+        <span class="brand-subtitle">第5章「The Peer-to-Peer Layer」を視覚化</span>
+      </div>
+      <nav id="tabs"></nav>
+    </header>
+
+    <main id="layout">
+      <section id="stage-wrap">
+        <canvas id="stage"></canvas>
+      </section>
+
+      <aside id="sidebar">
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">コントロール</span>
+            <span id="section-badge" class="badge">§ 5</span>
+          </div>
+          <div id="controls"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">統計</span></div>
+          <div id="stats"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">解説</span></div>
+          <div id="description" class="description"></div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="../shared/core.js"></script>
+    <script src="js/scenes/discovery.js"></script>
+    <script src="js/scenes/quic.js"></script>
+    <script src="js/scenes/gossipsub.js"></script>
+    <script src="js/scenes/reqresp.js"></script>
+    <script src="js/scenes/lifecycle.js"></script>
+    <script>
+      // Tab order follows the chapter: Discovery (5.2), QUIC (5.3),
+      // Gossipsub (5.4), Request-Response (5.5), then the lifecycle capstone.
+      window.P2P_SCENE_ORDER = ["discovery", "quic", "gossipsub", "reqresp", "lifecycle"];
+    </script>
+    <script src="../shared/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>lean-sim — Lean Consensus 可視化シミュレータ集</title>
+    <link rel="stylesheet" href="shared/style.css" />
+  </head>
+  <body style="display:block; overflow-y:auto">
+    <div class="landing">
+      <div class="landing-hero">
+        <h1>lean-sim</h1>
+        <p>
+          <code>lean_consensus</code> の各章で説明される仕組みを、ブラウザ上で動かして
+          直感的に理解するためのインタラクティブ・シミュレータ集です。
+          ビルド不要・依存ライブラリなしのバニラ JavaScript + Canvas。
+          見たいトピックを選んでください。
+        </p>
+      </div>
+
+      <div class="topic-grid">
+        <a class="topic-card available" href="p2p/index.html">
+          <div class="topic-section">§5 · The Peer-to-Peer Layer</div>
+          <div class="topic-name">P2P レイヤー</div>
+          <div class="topic-desc">
+            Discovery v5 (Kademlia/XOR探索)、QUIC (HOLブロッキング/RTT)、
+            Gossipsub (mesh伝播)、Request-Response、そして新規ノードの
+            参加〜稼働ライフサイクルを横断する総まとめ。
+          </div>
+          <span class="topic-status">▶ 利用可能</span>
+        </a>
+
+        <div class="topic-card soon">
+          <div class="topic-section">§2 · Simple Serialize</div>
+          <div class="topic-name">SSZ エンコーディング</div>
+          <div class="topic-desc">
+            シリアライズのオフセット、Merkleization とハッシュツリールート、
+            generalized index による証明の可視化。
+          </div>
+          <span class="topic-status">準備中</span>
+        </div>
+
+        <div class="topic-card soon">
+          <div class="topic-section">§3 · The Time Model</div>
+          <div class="topic-name">時間モデル</div>
+          <div class="topic-desc">
+            スロットと4つのインターバル、スロットクロック、genesis からの
+            時間導出をタイムラインで可視化。
+          </div>
+          <span class="topic-status">準備中</span>
+        </div>
+
+        <div class="topic-card soon">
+          <div class="topic-section">§4 · State Transition</div>
+          <div class="topic-name">状態遷移関数</div>
+          <div class="topic-desc">
+            ブロックの解剖、4 フェーズの遷移パイプライン
+            (slot処理 → ヘッダ検証 → ペイロード実行 → state root検証)。
+          </div>
+          <span class="topic-status">準備中</span>
+        </div>
+
+        <div class="topic-card soon">
+          <div class="topic-section">§6 · Consensus Mechanisms</div>
+          <div class="topic-name">コンセンサス</div>
+          <div class="topic-desc">
+            source–target–head の関係、attestation のライフサイクルと集約、
+            justification / finalization の進行。
+          </div>
+          <span class="topic-status">準備中</span>
+        </div>
+      </div>
+
+      <div class="landing-foot">
+        各シミュレータは <code>shared/</code> の core (描画・UI ヘルパ) と汎用シェルを共有しています。
+        新しいトピックは <code>&lt;topic&gt;/</code> ディレクトリを追加するだけで増やせます。
+      </div>
+    </div>
+  </body>
+</html>
