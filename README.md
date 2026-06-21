@@ -27,10 +27,11 @@ python3 -m http.server 8000
 | トピック | 章 | 状態 | 内容 |
 | --- | --- | --- | --- |
 | [P2P レイヤー](p2p/) | §5 | ✅ 利用可能 | Discovery v5 / QUIC / Gossipsub / Request-Response / 参加〜稼働ライフサイクル |
-| SSZ エンコーディング | §2 | 🚧 準備中 | オフセット、Merkleization、generalized index 証明 |
-| 時間モデル | §3 | 🚧 準備中 | スロットと4インターバル、スロットクロック |
-| 状態遷移関数 | §4 | 🚧 準備中 | ブロック解剖、4 フェーズの遷移パイプライン |
-| コンセンサス | §6 | 🚧 準備中 | source–target–head、attestation 集約、finalization |
+| [SSZ エンコーディング](ssz/) | §2 | ✅ 利用可能 | オフセット直列化 / Merkleization / generalized index 証明 |
+| [時間モデル](time/) | §3 | ✅ 利用可能 | スロットと4インターバル / リアルタイムのスロットクロック / タイミングゲーム |
+| [状態遷移関数](state/) | §4 | ✅ 利用可能 | 4 フェーズの遷移パイプライン / 状態・ブロックの解剖図 |
+| [コンセンサス](consensus/) | §6 | ✅ 利用可能 | source–target–head / フォーク選択 / attestation 集約と set-cover |
+| [統括 (全章)](protocol/) | §2–6 | ✅ 利用可能 | 全章を1本のスロット・ハートビートで統合した「生きたチェーン」 |
 
 ## 構成
 

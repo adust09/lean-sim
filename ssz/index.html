@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lean Consensus SSZ シミュレータ — 第2章</title>
+    <link rel="stylesheet" href="../shared/style.css" />
+  </head>
+  <body>
+    <header id="topbar">
+      <div class="brand">
+        <a class="brand-home" href="../index.html">← トピック一覧</a>
+        <span class="brand-title">Lean Consensus · SSZ シミュレータ</span>
+        <span class="brand-subtitle">第2章「Simple Serialize」を視覚化</span>
+      </div>
+      <nav id="tabs"></nav>
+    </header>
+
+    <main id="layout">
+      <section id="stage-wrap">
+        <canvas id="stage"></canvas>
+      </section>
+
+      <aside id="sidebar">
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">コントロール</span>
+            <span id="section-badge" class="badge">§ 2</span>
+          </div>
+          <div id="controls"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">統計</span></div>
+          <div id="stats"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">解説</span></div>
+          <div id="description" class="description"></div>
+        </div>
+      </aside>
+    </main>
+
+    <script src="../shared/core.js"></script>
+    <script src="js/scenes/serialize.js"></script>
+    <script src="js/scenes/merkleize.js"></script>
+    <script src="js/scenes/proof.js"></script>
+    <script>
+      // Tab order: Serialization (2.3), Merkleization (2.4), Merkle Proof (2.5).
+      window.P2P_SCENE_ORDER = ["serialize", "merkleize", "proof"];
+    </script>
+    <script src="../shared/app.js"></script>
+  </body>
+</html>
