@@ -1,77 +1,145 @@
 /*
- * sszmodel.js — shared SSZ model for the unified pipeline scene.
+ * sszmodel.js — SSZ model for the unified pipeline, with selectable containers.
  *
- * One Validator container flows through every SSZ stage:
- *   §2.3 serialize   — fixed fields inline, the variable field as a 4-byte offset
- *                      pointer with its data appended in the variable part.
- *   §2.4 merkleize   — each field's hash_tree_root is a leaf of a depth-2 binary
- *                      tree; pair-hash bottom-up to the container hash_tree_root.
- *   §2.5 proof       — a field's generalized index (gindex = 2^depth + position)
- *                      and the sibling witnesses needed to recompute the root.
+ * Presets cover both the PDF's teaching examples and the real leanSpec
+ * implementation types (src/lean_spec/spec/forks/lstar/containers):
+ *   PDF      — ValidatorRecord (§2.3, hypothetical, shows offsets),
+ *              Validator (§2.5, Ethereum: pubkey/withdrawal/balance/slashed).
+ *   leanSpec — Checkpoint, Validator, AttestationData (nested), BlockHeader.
  *
- * Hashes are a deterministic 4-hex rolling polynomial (no real SHA-256 needed).
+ * Each container flows through serialize (§2.3) → merkleize (§2.4) → proof
+ * (§2.5). Field kinds: "fixed" (inline), "variable" (List/Bitlist → 4-byte
+ * offset + data in the variable part), "nested" (a fixed-size sub-container
+ * whose hash_tree_root becomes the leaf). Hash = deterministic 4-hex rolling
+ * polynomial (no real SHA-256 needed).
  */
 "use strict";
 
 (function registerSszModel() {
   const { util } = P2P;
 
-  function hashLabel(labelString) {
+  function hashLabel(s) {
     let acc = 0x811c9dc5;
-    for (let i = 0; i < labelString.length; i++) {
-      acc ^= labelString.charCodeAt(i);
-      acc = Math.imul(acc, 0x01000193) >>> 0;
-    }
+    for (let i = 0; i < s.length; i++) { acc ^= s.charCodeAt(i); acc = Math.imul(acc, 0x01000193) >>> 0; }
     return util.toHexTag(acc & 0xffff, 4);
   }
-  function hashPair(left, right) {
-    return hashLabel(left + "|" + right);
+  function hashPair(l, r) { return hashLabel(l + "|" + r); }
+  const ZERO_HASH = hashLabel("zero");
+
+  // f(name, type, bytes, kind, value, elem) — kind: "fixed" | "variable" | "nested".
+  const f = (name, type, bytes, kind, value, elem) => ({ name, type, bytes, kind, value, elem });
+
+  const PRESETS = {
+    validatorRecord: {
+      label: "ValidatorRecord (PDF §2.3 仮想)", group: "PDF 教材例",
+      fields: [
+        f("id", "uint16", 2, "fixed", "42"),
+        f("signatures", "List[Bytes4]", 4, "variable", "[…]", 4),
+        f("pubkey", "Bytes48", 48, "fixed", "0xab12"),
+      ],
+    },
+    ethValidator: {
+      label: "Validator (PDF §2.5 Ethereum)", group: "PDF 教材例",
+      fields: [
+        f("pubkey", "Bytes48", 48, "fixed", "0xab12"),
+        f("withdrawal_credentials", "Bytes32", 32, "fixed", "0xcc00"),
+        f("effective_balance", "uint64", 8, "fixed", "32ETH"),
+        f("slashed", "boolean", 1, "fixed", "false"),
+      ],
+    },
+    checkpoint: {
+      label: "Checkpoint (leanSpec)", group: "leanSpec 実装",
+      fields: [
+        f("root", "Bytes32", 32, "fixed", "0x9f"),
+        f("slot", "Slot=uint64", 8, "fixed", "7"),
+      ],
+    },
+    leanValidator: {
+      label: "Validator (leanSpec)", group: "leanSpec 実装",
+      fields: [
+        f("attestation_public_key", "Bytes52", 52, "fixed", "0xa1"),
+        f("proposal_public_key", "Bytes52", 52, "fixed", "0xb2"),
+        f("index", "ValidatorIndex", 8, "fixed", "3"),
+      ],
+    },
+    attestationData: {
+      label: "AttestationData (leanSpec)", group: "leanSpec 実装",
+      fields: [
+        f("slot", "Slot", 8, "fixed", "7"),
+        f("head", "Checkpoint", 40, "nested", "htr"),
+        f("target", "Checkpoint", 40, "nested", "htr"),
+        f("source", "Checkpoint", 40, "nested", "htr"),
+      ],
+    },
+    blockHeader: {
+      label: "BlockHeader (leanSpec)", group: "leanSpec 実装",
+      fields: [
+        f("slot", "Slot", 8, "fixed", "7"),
+        f("proposer_index", "ValidatorIndex", 8, "fixed", "3"),
+        f("parent_root", "Bytes32", 32, "fixed", "0x11"),
+        f("state_root", "Bytes32", 32, "fixed", "0x22"),
+        f("body_root", "Bytes32", 32, "fixed", "0x33"),
+      ],
+    },
+  };
+
+  function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
+  function leafCount(preset) { return Math.max(1, nextPow2(preset.fields.length)); }
+  function treeDepth(preset) { return Math.round(Math.log2(leafCount(preset))); }
+  /** gindex of field at `position` (leaves start at 2^depth = leafCount). */
+  function leafGindex(preset, position) { return leafCount(preset) + position; }
+
+  function leafHash(field, listLength) {
+    if (field.kind === "variable") return hashLabel(field.name + ":list" + listLength);
+    if (field.kind === "nested") return hashLabel(field.name + ":htr");
+    return hashLabel(field.name + "=" + field.value);
   }
 
-  // Validator container fields, in declaration order (positions 0..3 → gindex 4..7).
-  // `signatures` is the one variable-length field (serialized as a 4-byte offset).
-  const FIELDS = [
-    { name: "id", type: "uint16", bytes: 2, fixed: true, value: "42", gindex: 4 },
-    { name: "pubkey", type: "Bytes48", bytes: 48, fixed: true, value: "0xab12", gindex: 5 },
-    { name: "balance", type: "uint64", bytes: 8, fixed: true, value: "32ETH", gindex: 6 },
-    { name: "signatures", type: "List[Bytes4]", bytes: 4, fixed: false, value: "[…]", gindex: 7 },
-  ];
-  const FIXED_PART_BYTES = FIELDS.reduce((sum, f) => sum + f.bytes, 0); // 2+48+8+4 = 62
-  const BYTES_PER_SIGNATURE = 4;
-
-  function leafHash(field, signatureCount) {
-    const value = field.fixed ? field.value : `${signatureCount}sig`;
-    return hashLabel(field.name + "=" + value);
-  }
-
-  /** Container merkleization: 4 field-root leaves (g4..g7) → root (g1). */
-  function buildTree(signatureCount) {
+  /** Container merkleization: field roots as leaves (+ zero padding) → root g1. */
+  function buildTree(preset, listLength) {
+    const leaves = leafCount(preset);
+    const depth = treeDepth(preset);
     const h = {};
-    for (const field of FIELDS) h[field.gindex] = leafHash(field, signatureCount);
-    h[2] = hashPair(h[4], h[5]);
-    h[3] = hashPair(h[6], h[7]);
-    h[1] = hashPair(h[2], h[3]);
-    return h;
+    for (let i = 0; i < leaves; i++) {
+      h[leaves + i] = i < preset.fields.length ? leafHash(preset.fields[i], listLength) : ZERO_HASH;
+    }
+    for (let level = depth - 1; level >= 0; level--) {
+      for (let p = 0; p < Math.pow(2, level); p++) {
+        const g = Math.pow(2, level) + p;
+        h[g] = hashPair(h[2 * g], h[2 * g + 1]);
+      }
+    }
+    return { hashes: h, depth, leaves };
   }
 
-  /** Fixed/variable byte layout for the serialization strip (§2.3). */
-  function serializeLayout(signatureCount) {
-    const variableBytes = signatureCount * BYTES_PER_SIGNATURE;
-    return {
-      fixedBytes: FIXED_PART_BYTES,
-      offsetValue: FIXED_PART_BYTES, // offset points to the start of the variable part
-      variableBytes,
-      totalBytes: FIXED_PART_BYTES + variableBytes,
-    };
+  /** Fixed/variable byte layout for the serialize strip (§2.3). */
+  function serializeLayout(preset, listLength) {
+    let fixedBytes = 0;
+    for (const field of preset.fields) fixedBytes += field.kind === "variable" ? 4 : field.bytes;
+    const segs = [];
+    const varParts = [];
+    let cursor = fixedBytes;
+    for (const field of preset.fields) {
+      if (field.kind === "variable") {
+        segs.push({ field, kind: "offset", bytes: 4, offsetValue: cursor });
+        const dataBytes = listLength * (field.elem || 4);
+        varParts.push({ field, bytes: dataBytes });
+        cursor += dataBytes;
+      } else {
+        segs.push({ field, kind: field.kind, bytes: field.bytes });
+      }
+    }
+    const variableBytes = varParts.reduce((s, p) => s + p.bytes, 0);
+    return { fixedBytes, variableBytes, totalBytes: fixedBytes + variableBytes, segs, varParts };
   }
 
-  /** Merkle proof for a leaf: sibling witnesses + recomputed nodes up to the root. */
+  /** Merkle proof for a leaf: sibling witnesses + recomputed nodes up to root. */
   function proofPlan(targetGindex) {
     const witnesses = [];
     const computed = [targetGindex];
     let g = targetGindex;
     while (g > 1) {
-      witnesses.push(g % 2 === 0 ? g + 1 : g - 1); // sibling = flip last bit
+      witnesses.push(g % 2 === 0 ? g + 1 : g - 1);
       g = Math.floor(g / 2);
       computed.push(g);
     }
@@ -79,11 +147,14 @@
   }
 
   P2P.sszModel = {
-    FIELDS,
-    FIXED_PART_BYTES,
-    BYTES_PER_SIGNATURE,
+    PRESETS,
     hashLabel,
     hashPair,
+    ZERO_HASH,
+    nextPow2,
+    leafCount,
+    treeDepth,
+    leafGindex,
     leafHash,
     buildTree,
     serializeLayout,
