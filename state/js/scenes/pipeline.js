@@ -58,6 +58,7 @@
   ];
 
   const TICK_DURATION = 0.6; // seconds per animation step
+  const END_HOLD_DURATION = 2.0; // seconds to hold the verdict before looping
 
   const scene = {
     id: "pipeline",
@@ -84,7 +85,8 @@
     height: 0,
     clock: 0,
     speed: 1,
-    autoPlay: false,
+    autoPlay: true,
+    endHoldClock: 0,      // time spent holding the final verdict before looping
     emptySlotCount: 2,    // block.slot − state.slot
     scenarioKey: "normal",
 
@@ -117,6 +119,7 @@
     build() {
       this.clock = 0;
       this.animationClock = 0;
+      this.endHoldClock = 0;
       this.currentPhaseIndex = 0;
       this.currentStepIndex = 0;
       this.phaseResults = ["pending", "pending", "pending", "pending"];
@@ -335,7 +338,16 @@
     update(realDt) {
       const cappedDt = Math.min(0.05, realDt);
       if (!this.autoPlay) return;
-      if (this.finalVerdict !== "pending" && this.currentStepIndex >= this.phaseSteps.length) return;
+
+      // Once the verdict is in, hold it briefly so it is readable, then loop
+      // back to the start so the motion keeps playing without user input.
+      const isFinished =
+        this.finalVerdict !== "pending" && this.currentStepIndex >= this.phaseSteps.length;
+      if (isFinished) {
+        this.endHoldClock += cappedDt * this.speed;
+        if (this.endHoldClock >= END_HOLD_DURATION) this.build();
+        return;
+      }
 
       this.animationClock += cappedDt * this.speed;
       const stepDuration = TICK_DURATION / this.speed;
