@@ -24,7 +24,7 @@
 
   // The four-interval slot pipeline (spec §3.2.1 / Fig 3.2).
   const INTERVAL_NARRATION = [
-    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信。ブロック処理 Υ が前スロットの集約票を適用し justification を確定 (§4)。",
+    "Interval 0 — Block Proposal: 提案者が Υ を実行しブロックと state_root を生成・配信。受信した各ノードが Υ を再実行し state_root を照合、前スロットの集約票を適用し justification を確定 (§4.3)。",
     "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留。aggregator が並行して集約 (§6.4)。",
     "Interval 2 — Safe Target Update: 票を数える前に、直近で 2/3 を集めたブロック (セーフターゲット) を確定し視点を安定化。",
     "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。重み更新→ヘッド再計算 (§6.3)。",
@@ -40,7 +40,7 @@
     descriptionHTML: `
       <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> プロトコルが「生きたチェーン」として動く様子を観察できる。毎スロット、4つのインターバル(§3)が次を駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り検証者メッシュへ伝播 (§5)。<code>parent_root</code> で連結し <code>hash_tree_root</code>(§2) を持つ。同時にブロック処理 Υ(§4.3 の4フェーズ: 時刻同期→ヘッダ検証→ペイロード実行→state root)が走り、前スロットの集約票を適用する(右の Υ パネル)。</li>
+        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り検証者メッシュへ伝播 (§5)。<code>parent_root</code> で連結し <code>hash_tree_root</code>(§2) を持つ。同時にブロック処理 Υ(§4.3 の4フェーズ: 時刻同期→ヘッダ検証→ペイロード実行→state root)が走る。<b>Υ は proposer だけでなく全ノードが実行</b>: proposer が構築時に算出した <code>state_root</code> を、受信した各ノードが Υ を再実行して照合する(右の Υ パネルで再検証ノード数が増える)。前スロットの集約票はここで適用。</li>
         <li><b>投票 Attestation Broadcast (I1):</b> 検証者が attestation を配信。<code>source</code>(直近justified)→<code>target</code>(今回のブロック)→<code>head</code> (§6.2)。<b>票はまだ pending</b>(保留・fork choice 未反映)。並行して aggregator が同一票を集約 (§6.4): 多数の XMSS 署名を1本 <code>Sagg</code> に圧縮し参加ビットフィールドに記録(右パネル / Fig 6.4)。</li>
         <li><b>セーフターゲット Safe Target Update (I2):</b> 票を数える前に<b>直近で 2/3 を集めたブロック(セーフターゲット)を確定</b>して視点を安定化し reorg を防ぐ。チェーン上で <code>safe ▸</code> 強調。</li>
         <li><b>受理 Attestation Acceptance (I3):</b> pending の票を受理して fork choice に投入(得票バーが埋まりヘッド再計算)。</li>
@@ -325,7 +325,9 @@
       const survivingParticles = [];
       for (const particle of this.particles) {
         particle.t += dt / particle.duration;
+        // On arrival the validator has the block and re-runs Υ (state_root matches).
         if (particle.t < 1) survivingParticles.push(particle);
+        else if (this.validators[particle.toIndex]) this.validators[particle.toIndex].hasBlock = true;
       }
       this.particles = survivingParticles;
 
@@ -581,7 +583,11 @@
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)", x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 11px ui-monospace, monospace", "left");
+      const reVerified = this.validators.filter((v) => v.hasBlock).length; // proposer + each receiving node that re-ran Υ
+      const title = active
+        ? `Υ(S,B) §4.3 — proposer#${this.currentSlot % this.validatorCount} 算出 → ${reVerified}/${this.onlineCount()} ノード再実行・state_root 照合✓`
+        : "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)";
+      draw.label(ctx, title, x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 10px ui-monospace, monospace", "left");
 
       // Phases advance across the first 2s of I0 (all done outside the I0 window).
       const phase = active ? util.clamp(Math.floor(this.slotTimer / 0.5), 0, 4) : -1;
@@ -602,14 +608,11 @@
         draw.label(ctx, (done ? "✓ " : "") + UPSILON_PHASES[i], cx + chipWidth / 2, cy + 10, done ? colors.nodeHasMessage : on ? colors.text : colors.textDim, "9px ui-monospace, monospace");
       }
 
-      const block = this.chain[this.chain.length - 1];
-      const incl = (block && block.included) || [];
+      const incl = (this.chain[this.chain.length - 1].included || []).map((a) => "s" + a.targetSlot).join(",");
       const just = this.upsilonApplied || [];
-      const detail = active
-        ? incl.length
-          ? `③ Consensus Execution: incl agg(${incl.map((a) => "s" + a.targetSlot).join(",")})` + (just.length ? ` → s${just.join(",s")} justified 確定` : " → 2/3未達で justify せず")
-          : "③ Consensus Execution: 取り込む集約なし"
-        : "次の提案(I0)でブロックを処理し4フェーズを実行する";
+      const detail = !active ? "次の提案(I0)でブロックを処理し4フェーズを実行する"
+        : !incl ? "③ Consensus Execution: 取り込む集約なし"
+        : `③ Consensus Execution: incl agg(${incl})` + (just.length ? ` → s${just.join(",s")} justified 確定` : " → 2/3未達で justify せず");
       draw.label(ctx, detail, x + 12, y + 56, active ? colors.text : colors.textDim, "10px ui-monospace, monospace", "left");
     },
 
