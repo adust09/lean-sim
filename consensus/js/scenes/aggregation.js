@@ -2,7 +2,7 @@
  * aggregation.js — §6.4, §6.5.4: Signature aggregation and proposer set-cover packing.
  *
  * Part 1 (§6.4): Committee of N validators, each voting with identical AttestationData.
- * Individual BLS signatures merge into one aggregate; a participation bitfield records
+ * Individual XMSS signatures merge into one aggregate; a participation bitfield records
  * who voted (1) vs. was offline (0). Toggle validators on/off to see updates live.
  *
  * Part 2 (§6.5.4, Fig 6.7): Gossip pool has overlapping aggregates (A:1100, B:0110,
@@ -43,7 +43,8 @@
     sectionRef: "6.4",
     descriptionHTML: `
       <p><b>Part 1 — 署名集約 (§6.4):</b></p>
-      <p>同じ AttestationData に投票したバリデータの BLS 署名を<b>1本の集約署名</b>に統合。
+      <p>同じ AttestationData に投票したバリデータの XMSS 署名(ハッシュベース・耐量子)を
+      <b>1本の集約署名</b>に統合。XMSS 署名は大きいため圧縮が必須 (§6.4.2)。
       参加ビットフィールド: ビット i=1 → バリデータ i が投票済み、0 → 欠席。</p>
       <p>各バリデータの ON/OFF を切り替えると bitfield と集約が即座に更新される。
       「集約アニメーション」で個別署名が合流する様子を再生。</p>

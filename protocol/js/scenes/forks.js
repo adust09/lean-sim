@@ -22,7 +22,7 @@
 (function registerForks() {
   const { util, draw, colors } = P2P;
 
-  const SLOT_DURATION = 3.4;
+  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
   const INTERVAL_COUNT = 4;
 
   const SCENARIOS = {
@@ -31,6 +31,15 @@
     partition: { label: "ネットワーク分断 (60/40)" },
     equivocation: { label: "二重提案 (equivocation)" },
   };
+
+  // The four per-slot intervals (§3) that drive the fork-choice cycle.
+  const INTERVAL_LABELS = ["I0 提案", "I1 投票", "I2 セーフターゲット", "I3 フォーク選択"];
+  const INTERVAL_NARRATION = [
+    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信 (§3,§5)。フォーク時は枝が分岐する。",
+    "Interval 1 — Attestation Broadcast: 各検証者が attestation を投票。票が枝ごとに分かれる (§6.2)。",
+    "Interval 2 — Safe Target Update: 直近で 2/3 を集めたブロック (セーフターゲット) を確定して視点を安定化。",
+    "Interval 3 — Attestation Acceptance: 票を受理し GHOST フォーク選択でヘッド再計算、reorg / justify を判定 (§6.3)。",
+  ];
 
   const scene = {
     id: "forks",
@@ -53,6 +62,10 @@
       <p><b>finality との関係:</b> justification は1ブロックへの 2/3 集票が必要。票が割れる間は
       どの枝も justified にならず、finalized も進まない。フォークが解消し多数が一枝に集まって
       初めて finality が再開する。</p>
+      <p><b>読み方:</b> 検証者ノードは投票した枝の色(青=枝A/群0・橙=枝B/群1、フォークが無ければ緑)に染まる。
+      各ブロックの <code>Σ</code> は部分木の累積得票(GHOST の判断材料)、<code>v</code> はそのブロック単体への直接得票。
+      最新スロットのブロックには直接得票を <b>2/3 ライン</b>(赤線)と比較するバーが付く — 票が割れると
+      どの枝も赤線に届かず justify できないことが見える。</p>
       <p><b>操作:</b> シナリオを選んで再生。緑=finalized / 水色=justified / 橙=正規ヘッド /
       くすんだ赤=reorgで外れた枝。</p>`,
 
@@ -219,6 +232,14 @@
       }
     },
 
+    /** Color a vote by which branch it lands on: blue/orange when forked, else green. */
+    branchColor(block) {
+      if (this.partitioned || this.competing) {
+        return block.proposerGroup === 1 ? "#f6a52f" : "#2f6df6";
+      }
+      return colors.nodeHasMessage;
+    },
+
     ancestorOf(maybeAncestor, block) {
       let walk = block;
       while (walk) {
@@ -244,6 +265,10 @@
     propose() {
       this.proposedThisSlot = true;
       this.competing = null;
+      for (const validator of this.validators) {
+        validator.voted = false;
+        validator.voteColor = null;
+      }
 
       if (this.scenario === "partition" && this.partitioned) {
         const blockA = this.createBlock(this.groupTip[0], 0);
@@ -310,6 +335,8 @@
         }
         if (target) {
           target.weight += 1;
+          voter.voted = true;
+          voter.voteColor = this.branchColor(target);
           this.particles.push({
             fromX: this.vx(voter),
             fromY: this.vy(voter),
@@ -317,7 +344,7 @@
             toY: this.blockY(target),
             t: 0,
             duration: 0.5 + this.rng() * 0.4,
-            color: colors.ihave,
+            color: voter.voteColor,
           });
         }
       }
@@ -456,9 +483,36 @@
 
     renderClock(ctx) {
       const left = 28;
-      draw.label(ctx, `Slot ${this.currentSlot}  ·  ${SCENARIOS[this.scenario].label}`, left, 26, colors.nodeSource, "bold 14px ui-monospace, monospace", "left");
       const status = this.partitioned ? "ネットワーク分断中 — finality 停止" : this.competing ? "フォーク発生 — 票が分裂" : "単一チェーン";
-      draw.label(ctx, `I${this.interval} · ${status}`, left, 46, this.partitioned || this.competing ? colors.prune : colors.textDim, "12px ui-monospace, monospace", "left");
+      draw.label(ctx, `Slot ${this.currentSlot}  ·  ${SCENARIOS[this.scenario].label}`, left, 22, colors.nodeSource, "bold 14px ui-monospace, monospace", "left");
+      draw.label(ctx, status, this.width - 28, 22, this.partitioned || this.competing ? colors.prune : colors.textDim, "12px ui-monospace, monospace", "right");
+      this.renderIntervalBar(ctx, 34);
+      draw.label(ctx, INTERVAL_NARRATION[this.interval], this.width / 2, 92, colors.text, "12px ui-monospace, monospace");
+    },
+
+    renderIntervalBar(ctx, top) {
+      const left = 28;
+      const right = this.width - 28;
+      const segWidth = (right - left) / INTERVAL_COUNT;
+      const intervalLength = SLOT_DURATION / INTERVAL_COUNT;
+      for (let i = 0; i < INTERVAL_COUNT; i++) {
+        const x = left + i * segWidth;
+        const active = i === this.interval;
+        ctx.save();
+        draw.roundedRect(ctx, x + 3, top, segWidth - 6, 26, 6);
+        ctx.fillStyle = active ? "#16263d" : "#121a27";
+        ctx.fill();
+        ctx.lineWidth = active ? 2 : 1;
+        ctx.strokeStyle = active ? colors.accent : colors.grid;
+        ctx.stroke();
+        ctx.restore();
+        draw.label(ctx, INTERVAL_LABELS[i], x + segWidth / 2, top + 13, active ? colors.text : colors.textDim, "12px ui-monospace, monospace");
+        if (active && this.auto) {
+          const progress = util.clamp((this.slotTimer % intervalLength) / intervalLength, 0, 1);
+          ctx.fillStyle = colors.accent;
+          ctx.fillRect(x + 4, top + 23, (segWidth - 8) * progress, 2);
+        }
+      }
     },
 
     renderNetwork(ctx) {
@@ -469,11 +523,13 @@
         const y = this.vy(node);
         let fill = colors.node;
         if (this.partitioned) fill = node.group === 0 ? "#2f6df6" : "#f6a52f";
+        // Once a validator has voted, tint it by the branch it voted for.
+        if (node.voted && node.voteColor) fill = node.voteColor;
         if (node.index === proposerIndex) {
           draw.glow(ctx, x, y, 16, colors.nodeSource);
           fill = colors.nodeSource;
         }
-        draw.disc(ctx, x, y, 6.5, fill, colors.nodeStroke, 1.1);
+        draw.disc(ctx, x, y, 6.5, fill, node.voted ? colors.text : colors.nodeStroke, 1.1);
       }
       if (this.partitioned) {
         draw.label(ctx, "群0 (60%)", this.netLeft(), this.netBottom() - 8, "#6fa0ff", "11px ui-monospace, monospace", "left");
@@ -521,24 +577,48 @@
         ctx.restore();
         const labelText = block.slot === 0 ? "gen" : `s${block.slot}`;
         draw.label(ctx, `${labelText} ${block.root}`, x, y - 5, orphaned ? colors.textDim : colors.text, "9px ui-monospace, monospace");
-        draw.label(ctx, `w ${this.subtreeWeight(block, memo)}`, x, y + 8, orphaned ? colors.textDim : colors.accent, "9px ui-monospace, monospace");
+        // Σ = accumulated subtree weight (GHOST); v = this block's direct votes.
+        draw.label(ctx, `Σ${this.subtreeWeight(block, memo)} · v${block.weight}`, x, y + 8, orphaned ? colors.textDim : colors.accent, "9px ui-monospace, monospace");
         if (block === this.headBlock) draw.label(ctx, "◀ head", x + 34, y, colors.nodeSource, "10px ui-monospace, monospace", "left");
+        // Newest-slot blocks: direct-weight bar vs the 2/3 justification line.
+        if (block.slot === this.currentSlot && block.slot !== 0) {
+          this.renderDirectWeightBar(ctx, x, y + 20, block);
+        }
       }
+    },
+
+    renderDirectWeightBar(ctx, cx, top, block) {
+      const barWidth = 56;
+      const x = cx - barWidth / 2;
+      const threshold = Math.ceil((2 * this.validatorCount) / 3);
+      const reached = block.weight >= threshold;
+      ctx.save();
+      draw.roundedRect(ctx, x, top, barWidth, 5, 2);
+      ctx.fillStyle = "#10161f";
+      ctx.fill();
+      ctx.restore();
+      const fraction = util.clamp(block.weight / Math.max(1, this.validatorCount), 0, 1);
+      ctx.fillStyle = reached ? colors.nodeHasMessage : colors.accent;
+      ctx.fillRect(x + 0.5, top + 0.5, (barWidth - 1) * fraction, 4);
+      const tx = x + barWidth * (threshold / Math.max(1, this.validatorCount));
+      draw.line(ctx, tx, top - 2, tx, top + 7, colors.nodeTarget, 1.5, false);
     },
 
     renderLegend(ctx) {
       const items = [
-        ["finalized", colors.nodeHasMessage],
+        ["finalized / 投票済", colors.nodeHasMessage],
         ["justified", colors.graft],
-        ["正規ヘッド", colors.nodeSource],
+        ["正規ヘッド / 提案者", colors.nodeSource],
         ["reorgで除外", colors.prune],
-        ["ブロック伝播 / 票", colors.data],
+        ["枝A (群0) への票", "#2f6df6"],
+        ["枝B (群1) への票", "#f6a52f"],
+        ["2/3 閾値", colors.nodeTarget],
       ];
       let y = this.netBottom() - items.length * 16 - 4;
       const x = this.treeLeft();
       ctx.save();
       ctx.globalAlpha = 0.92;
-      draw.roundedRect(ctx, x - 8, y - 14, 184, items.length * 16 + 12, 8);
+      draw.roundedRect(ctx, x - 8, y - 14, 196, items.length * 16 + 12, 8);
       ctx.fillStyle = "#0e1420cc";
       ctx.fill();
       ctx.restore();
