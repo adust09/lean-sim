@@ -17,7 +17,7 @@
 "use strict";
 
 (function registerBeacon() {
-  const { util, draw, colors } = P2P;
+  const { util, draw, colors, ease } = P2P;
 
   const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
   const INTERVAL_COUNT = 4;
@@ -61,6 +61,10 @@
     chain: [],
     particles: [],
     attestationDots: [],
+    aggregateParticles: [],
+    collectedSigs: 0,
+    aggregatePulse: 0,
+    aggregateEmitted: false,
     currentSlot: 0,
     slotTimer: 0,
     interval: 0,
@@ -89,6 +93,10 @@
       this.rng = util.makeRng(this.seed * 7919 + this.validatorCount);
       this.particles = [];
       this.attestationDots = [];
+      this.aggregateParticles = [];
+      this.collectedSigs = 0;
+      this.aggregatePulse = 0;
+      this.aggregateEmitted = false;
       // Slot 0 is the genesis slot (no proposer); proposals begin at slot 1.
       this.currentSlot = 1;
       this.slotTimer = 0;
@@ -228,6 +236,10 @@
 
     castAttestations() {
       this.attestedThisSlot = true;
+      this.collectedSigs = 0;
+      this.aggregateParticles = [];
+      this.aggregatePulse = 0;
+      this.aggregateEmitted = false;
       // Pick a deterministic aggregator that collects the slot's attestations.
       this.aggregatorIndex = (this.currentSlot * 13 + 7) % this.validatorCount;
       // The attestation triple every voter signs this slot (§6.2):
@@ -310,37 +322,56 @@
       this.aggY = aggregator ? this.vy(aggregator) : this.netBottom();
       this.dotTarget = { x: this.netRight() + 40, y: this.height - 110 };
 
-      let aggregating = 0;
+      // Phase A — individual signatures travel voter → aggregator and merge.
       const survivingDots = [];
       for (const dot of this.attestationDots) {
         dot.t += dt / dot.duration;
-        // First half (voter → aggregator) counts the vote at the aggregator.
-        if (dot.t >= 0.5 && !dot.counted) {
-          dot.counted = true;
-          const voter = this.validators[dot.voterIndex];
-          if (voter) voter.voted = true;
-        }
-        if (dot.t >= 0.5) aggregating++;
         if (dot.t >= 1) {
+          this.collectedSigs += 1;
           this.votesAccrued = Math.min(this.expectedVotes || 0, this.votesAccrued + 1);
           if (block) block.weight = this.votesAccrued;
+          const voter = this.validators[dot.voterIndex];
+          if (voter) voter.voted = true;
+          this.aggregatePulse = 1; // flash the aggregator as each signature folds in
         } else {
           survivingDots.push(dot);
         }
       }
       this.attestationDots = survivingDots;
-      this.aggregatingCount = aggregating;
+      this.aggregatePulse = Math.max(0, this.aggregatePulse - dt * 3.5);
+
+      // Once the whole batch is folded in, emit ONE aggregate signature to chain.
+      if (!this.aggregateEmitted && this.expectedVotes > 0 && this.collectedSigs >= this.expectedVotes) {
+        this.aggregateEmitted = true;
+        this.aggregateParticles.push({
+          t: 0,
+          duration: 0.8,
+          sigCount: this.collectedSigs,
+          toX: this.dotTarget.x,
+          toY: this.dotTarget.y,
+        });
+      }
+
+      // Phase B — the single merged aggregate travels aggregator → chain.
+      const survivingBundles = [];
+      for (const bundle of this.aggregateParticles) {
+        bundle.t += dt / bundle.duration;
+        if (bundle.t < 1) survivingBundles.push(bundle);
+      }
+      this.aggregateParticles = survivingBundles;
+      this.aggregatingCount = this.collectedSigs;
     },
 
-    /** Two-segment path for an attestation dot: voter → aggregator → chain. */
+    /** Eased path for a signature folding into the aggregator (voter → aggregator). */
     dotPos(dot) {
-      if (dot.t < 0.5) {
-        const f = dot.t / 0.5;
-        return { x: util.lerp(dot.fromX, this.aggX, f), y: util.lerp(dot.fromY, this.aggY, f) };
-      }
-      const f = (dot.t - 0.5) / 0.5;
-      const target = this.dotTarget || { x: this.netRight(), y: this.height - 110 };
-      return { x: util.lerp(this.aggX, target.x, f), y: util.lerp(this.aggY, target.y, f) };
+      const f = ease.outCubic(util.clamp(dot.t, 0, 1));
+      return { x: util.lerp(dot.fromX, this.aggX, f), y: util.lerp(dot.fromY, this.aggY, f) };
+    },
+
+    /** Eased path for the merged aggregate signature (aggregator → chain). */
+    bundlePos(bundle) {
+      const f = ease.inOutCubic(util.clamp(bundle.t, 0, 1));
+      return { x: util.lerp(this.aggX, bundle.toX, f), y: util.lerp(this.aggY, bundle.toY, f) };
     },
 
     stepOneSlot() {
@@ -353,7 +384,9 @@
         if (voter) voter.voted = true;
       }
       this.votesAccrued = this.expectedVotes || 0;
+      this.collectedSigs = this.expectedVotes || 0;
       this.attestationDots = [];
+      this.aggregateParticles = [];
       this.advanceSlot();
     },
 
@@ -419,16 +452,29 @@
         draw.disc(ctx, x, y, 3.5, colors.data, null);
       }
 
-      // Attestation dots flowing voter → aggregator → chain (votes collected).
+      // Phase A — individual signatures ease into the aggregator and fade as
+      // they merge (brightening from attestation purple to aggregate cyan).
       for (const dot of this.attestationDots) {
         const pos = this.dotPos(dot);
-        // Brighten as the vote crosses the aggregator into the aggregate.
-        draw.disc(ctx, pos.x, pos.y, dot.t >= 0.5 ? 3 : 2.5, dot.t >= 0.5 ? colors.graft : colors.ihave, null);
+        const near = dot.t > 0.55;
+        ctx.save();
+        ctx.globalAlpha = util.lerp(1, 0.4, util.clamp(dot.t, 0, 1));
+        if (near) draw.glow(ctx, pos.x, pos.y, 9, colors.graft);
+        draw.disc(ctx, pos.x, pos.y, near ? 3 : 2.5, near ? colors.graft : colors.ihave, null);
+        ctx.restore();
+      }
+      // Phase B — the single merged aggregate signature flies to the chain.
+      for (const bundle of this.aggregateParticles) {
+        const pos = this.bundlePos(bundle);
+        const radius = 4 + Math.min(6, bundle.sigCount * 0.3);
+        draw.glow(ctx, pos.x, pos.y, radius + 9, colors.graft);
+        draw.disc(ctx, pos.x, pos.y, radius, colors.graft, colors.text, 1.2);
+        draw.label(ctx, "集約署名", pos.x, pos.y - radius - 8, colors.graft, "9px ui-monospace, monospace");
       }
 
       // Validator nodes, colored by their role/state this slot.
       const proposerIndex = this.currentSlot % this.validatorCount;
-      const aggregatorActive = this.attestedThisSlot && this.interval >= 2;
+      const aggregatorActive = this.attestedThisSlot;
       for (const node of this.validators) {
         const x = this.vx(node);
         const y = this.vy(node);
@@ -439,7 +485,9 @@
         let fill = node.voted ? colors.nodeHasMessage : colors.node;
         let stroke = colors.nodeStroke;
         if (node.index === this.aggregatorIndex && aggregatorActive) {
-          draw.glow(ctx, x, y, 18, colors.graft);
+          // A pulse ring expands each time a signature folds into the aggregate.
+          draw.glow(ctx, x, y, 18 + 10 * this.aggregatePulse, colors.graft);
+          if (this.aggregatePulse > 0.02) draw.disc(ctx, x, y, 9 + 11 * this.aggregatePulse, null, colors.graft, 1.6);
           stroke = colors.graft;
         }
         if (node.index === proposerIndex && this.proposedThisSlot) {
@@ -452,7 +500,7 @@
       draw.label(ctx, "検証者メッシュ (§5)", this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
       if (aggregatorActive) {
         const agg = this.validators[this.aggregatorIndex];
-        if (agg) draw.label(ctx, `aggregator ▸ 集約 ${this.aggregatingCount || 0}`, this.vx(agg), this.vy(agg) - 16, colors.graft, "10px ui-monospace, monospace");
+        if (agg) draw.label(ctx, `aggregator ▸ ${this.collectedSigs}署名 → 1`, this.vx(agg), this.vy(agg) - 18, colors.graft, "10px ui-monospace, monospace");
       }
     },
 
