@@ -49,6 +49,8 @@
       <p><b>2つの軸:</b> I0–I3 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
       <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
       <p><b>深いリオルグ (秘匿枝の後出し):</b> 結託した多数派(群0 ≈60%)が slot3 で<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1 ≈40%)に公開チェーンを伸ばさせたまま、裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。slot7 で秘匿枝を<b>後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
+      <p><b>バランシング攻撃:</b> slot3 で2枝に分岐したあと、敵対者が毎スロット<b>劣勢の枝に約60%の票を寄せて</b>形勢を反転させ続ける。どちらの枝も 1スロットで 2/3 に届かないため <b>justify が起きず finality が凍結</b>、GHOST ヘッドは毎スロット左右に振動して reorg カウントが延々と増える。ネットワーク分断と違い<b>自然回復しない</b>(liveness 攻撃) — fork choice 単体の弱点で、proposer boost や 3SF の finality が要る理由。ただし finalized 済みプレフィックスより下は揺れない。</p>
+      <p><b>不活性リーク:</b> 少数派(40%)がオフラインになると、活動中は 60% しかなく <b>2/3 未達で finality 停止</b>。プロトコルは<b>不活性検証者の影響力(ステーク)を毎スロット抜いていき</b>(本シミュは離散的に active set から1人ずつ漏出させて表現)、<b>有効ステークの分母が縮小</b>。やがて活動中の 60% が縮んだ集合の 2/3 を再び満たし <b>finality が回復</b>する。閾値ライン(右の得票バー)が下がって緑になる瞬間が回復点。</p>
       <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
       <p><b>色凡例:</b><br>
       <span style="color:#36d399">●</span> 提案ブロック伝播 / accepted / finalized &nbsp;
@@ -127,6 +129,29 @@
       this.acceptedThisSlot = false;
       this.buildValidators();
       this.fork = P2P.createForkModel(this.validatorCount);
+      // LMD bookkeeping: every validator's latest vote starts at genesis (which
+      // is seeded with the full weight), so the first real vote moves it off.
+      for (const validator of this.validators) validator.latestVote = this.fork.genesis;
+      if (this.scenario === "leak") this.setupLeak();
+    },
+
+    /** Inactivity leak (§6): the minority group goes offline, so the active
+     *  participants (60%) start below the 2/3 supermajority and finality stalls. */
+    setupLeak() {
+      for (const validator of this.validators) {
+        if (validator.group === 1) { validator.online = false; validator.inactive = true; }
+      }
+    },
+
+    /** Each stalled slot bleeds one inactive validator out of the active set,
+     *  shrinking the 2/3 denominator until the online 60% clears it and finality
+     *  resumes (modelled as discrete leak-out steps rather than continuous decay). */
+    applyLeak() {
+      if (this.headSlotVotes >= this.fork.threshold()) return; // finality recovered — leak stops
+      const victim = this.validators.find((v) => v.inactive && !v.ejected);
+      if (!victim) return;
+      victim.ejected = true;
+      this.fork.activeCount -= 1;
     },
 
     buildValidators() {
@@ -174,8 +199,19 @@
     vx(node) { return this.netLeft() + node.nx * (this.netRight() - this.netLeft()); },
     vy(node) { return this.netTop() + (node.ny - 0.12) * (this.netBottom() - this.netTop()) * 1.25; },
     onlineCount() { return this.validators.filter((v) => v.online).length; },
-    threshold() { return Math.ceil((2 * this.validatorCount) / 3); },
+    threshold() { return this.fork ? this.fork.threshold() : Math.ceil((2 * this.validatorCount) / 3); },
     forkActive() { return !!(this.fork && (this.fork.competing || this.fork.partitioned)); },
+
+    meshNote() {
+      if (this.fork.partitioned) return " — 2群に分断 (青60/橙40)";
+      if (this.fork.balancing) return " — 2枝に拮抗 (どちらも2/3未達 → finality 停止)";
+      if (this.scenario === "leak") {
+        const inactive = this.validators.filter((v) => v.inactive).length;
+        const ejected = this.validators.filter((v) => v.ejected).length;
+        return ` — 不活性 ${inactive} / 漏出 ${ejected}(active ${this.fork.activeCount})`;
+      }
+      return "";
+    },
 
     proposerForGroup(group) {
       const pool = this.validators.filter((v) => v.group === group && v.online);
@@ -230,7 +266,7 @@
       this.voters = voters;
       this.expectedVotes = voters.length;
       for (const voter of voters) {
-        voter.voteTarget = this.fork.voteTargetFor(voter.group, this.scenario);
+        voter.voteTarget = this.fork.voteTargetFor(voter.group, this.scenario, voter.index);
         this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: 0.6 + this.rng() * 0.5 });
       }
     },
@@ -248,13 +284,19 @@
       for (const voter of this.voters || []) {
         if (voter.voteState === "pending" && voter.voteTarget) {
           voter.voteState = "accepted";
+          // LMD-GHOST: a validator's weight counts only at its latest vote, so
+          // moving to a new target removes it from the previous one.
+          if (voter.latestVote) voter.latestVote.weight -= 1;
           voter.voteTarget.weight += 1;
+          voter.latestVote = voter.voteTarget;
           tally.set(voter.voteTarget, (tally.get(voter.voteTarget) || 0) + 1);
         }
       }
       this.slotTally = tally;
       this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
+      const previousHead = this.fork.headBlock;
       this.fork.recomputeHead();
+      this.fork.detectReorg(previousHead); // votes can flip the head onto another branch (e.g. balancing)
       const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
       if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
     },
@@ -283,6 +325,7 @@
       this.acceptedThisSlot = false;
       this.votesAccrued = 0;
       this.fork.applyScenarioTransitions(this.scenario, this.currentSlot);
+      if (this.scenario === "leak") this.applyLeak();
     },
 
     /* ------------------------- update ------------------------- */
@@ -449,7 +492,13 @@
       for (const node of this.validators) {
         const x = this.vx(node);
         const y = this.vy(node);
-        if (!node.online) { draw.disc(ctx, x, y, 6, colors.nodeDead, "#4a3340", 1); continue; }
+        if (!node.online) {
+          ctx.save();
+          if (node.ejected) ctx.globalAlpha = 0.45; // bled out of the active set by the leak
+          draw.disc(ctx, x, y, node.ejected ? 4 : 6, colors.nodeDead, "#4a3340", 1);
+          ctx.restore();
+          continue;
+        }
         let fill = node.voteState === "accepted"
           ? (forked ? BRANCH_COLOR[node.group] : colors.nodeHasMessage)
           : node.voteState === "pending" ? colors.iwant : colors.node;
@@ -466,7 +515,7 @@
         }
         draw.disc(ctx, x, y, 7, fill, stroke, 1.4);
       }
-      draw.label(ctx, "検証者メッシュ (§5)" + (this.fork.partitioned ? " — 2群に分断 (青60/橙40)" : ""), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
+      draw.label(ctx, "検証者メッシュ (§5)" + this.meshNote(), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
       if (aggregatorActive) {
         const agg = this.validators[this.aggregatorIndex];
         if (agg) draw.label(ctx, `aggregator ▸ ${this.collectedSigs}署名 → 1`, this.vx(agg), this.vy(agg) - 18, colors.graft, "10px ui-monospace, monospace");
@@ -584,21 +633,22 @@
     renderWeightBar(ctx, x, y) {
       const barWidth = Math.min(330, this.width - x - 36);
       if (barWidth < 80) return;
-      const thresholdFraction = this.threshold() / this.validatorCount;
-      const voteFraction = this.validatorCount ? this.votesAccrued / this.validatorCount : 0;
+      const denom = this.fork.activeCount; // active stake (= validatorCount except under the leak)
+      const thresholdFraction = this.threshold() / denom;
+      const voteFraction = denom ? this.votesAccrued / denom : 0;
       draw.label(ctx, "先頭枝の今スロット得票 (§6)", x, y - 12, colors.textDim, "11px ui-monospace, monospace", "left");
       ctx.save();
       draw.roundedRect(ctx, x, y, barWidth, 16, 4);
       ctx.fillStyle = "#10161f";
       ctx.fill();
       ctx.restore();
-      const reached = 3 * this.votesAccrued >= 2 * this.validatorCount;
+      const reached = 3 * this.votesAccrued >= 2 * denom;
       ctx.fillStyle = reached ? colors.nodeHasMessage : colors.accent;
       ctx.fillRect(x + 1, y + 1, Math.max(0, (barWidth - 2) * util.clamp(voteFraction, 0, 1)), 14);
       const thresholdX = x + barWidth * thresholdFraction;
       draw.line(ctx, thresholdX, y - 3, thresholdX, y + 19, colors.nodeTarget, 2, false);
       draw.label(ctx, "2/3", thresholdX, y + 28, colors.nodeTarget, "10px ui-monospace, monospace");
-      draw.label(ctx, `${this.votesAccrued} / ${this.validatorCount}`, x + barWidth + 8, y + 8, colors.text, "11px ui-monospace, monospace", "left");
+      draw.label(ctx, `${this.votesAccrued} / ${denom}`, x + barWidth + 8, y + 8, colors.text, "11px ui-monospace, monospace", "left");
     },
 
     onMouse() {},
@@ -608,11 +658,15 @@
       const phase = ["提案", "投票 (pending)", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
       const memo = new Map();
       const branchWeights = this.fork.tips().map((t) => this.fork.subtreeWeight(t, memo)).sort((a, b) => b - a);
-      const state = this.fork.partitioned ? "分断中" : this.fork.attacking ? "秘匿構築中" : this.fork.competing ? "フォーク中" : "単一";
+      const state = this.fork.partitioned ? "分断中"
+        : this.fork.balancing ? "バランシング中"
+        : this.fork.attacking ? "秘匿構築中"
+        : this.fork.competing ? "フォーク中" : "単一";
       return [
         { label: "スロット / I", value: `${this.currentSlot} / I${this.interval} ${phase}` },
         { label: "シナリオ / 状態", value: `${P2P.forkScenarios[this.scenario].label} (${state})` },
         { label: "検証者数 / 参加率", value: `${this.validatorCount} (online ${this.onlineCount()}) / ${Math.round(this.participation * 100)}%` },
+        { label: "有効ステーク / 2/3 閾値", value: `${this.fork.activeCount} / ${this.fork.threshold()}` },
         { label: "正規ヘッド (GHOST)", value: this.fork.headBlock.slot === 0 ? "genesis" : `slot ${this.fork.headBlock.slot}` },
         { label: "枝の重み (上位)", value: branchWeights.slice(0, 2).join(" / ") || "0" },
         { label: "先頭枝の得票", value: `${this.votesAccrued} / ${this.validatorCount}` },
