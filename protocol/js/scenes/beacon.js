@@ -24,7 +24,7 @@
 
   // The four-interval slot pipeline (spec §3.2.1 / Fig 3.2).
   const INTERVAL_NARRATION = [
-    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信。自分の票も同梱 (§3,§5)。",
+    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信。ブロック処理 Υ が前スロットの集約票を適用し justification を確定 (§4)。",
     "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留。aggregator が並行して集約 (§6.4)。",
     "Interval 2 — Safe Target Update: 票を数える前に、直近で 2/3 を集めたブロック (セーフターゲット) を確定し視点を安定化。",
     "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。重み更新→ヘッド再計算 (§6.3)。",
@@ -35,28 +35,16 @@
     title: "ビーコンチェーン稼働",
     sectionRef: "2–6",
     descriptionHTML: `
-      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b>
-      プロトコルが「生きたチェーン」として動く様子を観察できる。</p>
-      <p>毎スロット、4つのインターバル(§3)が次を駆動する:</p>
+      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> プロトコルが「生きたチェーン」として動く様子を観察できる。毎スロット、4つのインターバル(§3)が次を駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り、検証者メッシュへ伝播 (§5)。
-        各ブロックは <code>parent_root</code> で連結し、<code>hash_tree_root</code>(§2) を持つ。</li>
-        <li><b>投票 Attestation Broadcast (I1):</b> 検証者が attestation を配信。
-        <code>source</code>(直近justified) → <code>target</code>(今回のブロック) → <code>head</code> (§6.2)。
-        <b>票はこの時点では pending</b>(保留)で、まだ fork choice には反映しない。
-        並行して aggregator が同一票を集約 (§6.4): 多数の XMSS 署名を1本 <code>Sagg</code> に圧縮し、
-        参加ビットフィールドに記録(右の「集約 Aggregate」パネル / Fig 6.4)。</li>
-        <li><b>セーフターゲット Safe Target Update (I2):</b> 新しい票を数える前に、
-        <b>直近で 2/3 を集めたブロック(セーフターゲット)を確定</b>して視点を安定化させ、
-        chaotic な reorg を防ぐ。チェーン上で <code>safe ▸</code> として強調。</li>
-        <li><b>受理 Attestation Acceptance (I3):</b> pending の票を受理して fork choice に投入。
-        集約署名がチェーンに取り込まれ、得票バーが埋まり、ヘッドを再計算する。</li>
+        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り検証者メッシュへ伝播 (§5)。<code>parent_root</code> で連結し <code>hash_tree_root</code>(§2) を持つ。同時にブロック処理 Υ が走る(下記)。</li>
+        <li><b>投票 Attestation Broadcast (I1):</b> 検証者が attestation を配信。<code>source</code>(直近justified)→<code>target</code>(今回のブロック)→<code>head</code> (§6.2)。<b>票はまだ pending</b>(保留・fork choice 未反映)。並行して aggregator が同一票を集約 (§6.4): 多数の XMSS 署名を1本 <code>Sagg</code> に圧縮し参加ビットフィールドに記録(右パネル / Fig 6.4)。</li>
+        <li><b>セーフターゲット Safe Target Update (I2):</b> 票を数える前に<b>直近で 2/3 を集めたブロック(セーフターゲット)を確定</b>して視点を安定化し reorg を防ぐ。チェーン上で <code>safe ▸</code> 強調。</li>
+        <li><b>受理 Attestation Acceptance (I3):</b> pending の票を受理して fork choice に投入(得票バーが埋まりヘッド再計算)。</li>
       </ol>
-      <p><b>justification / finalization (§4,§6):</b> 1スロットの票が
-      <code>3·票 ≥ 2·総数</code> (2/3) を超えるとそのブロックは <b>justified</b>。
-      justified が連続すると一つ前が <b>finalized</b> (不可逆) になる。</p>
-      <p><b>操作:</b> 「参加率」を 2/3 未満に下げると justification が止まる様子が見える。
-      検証者数・速度も変更可。「1スロット進める」で1歩ずつ。</p>`,
+      <p><b>2つの軸:</b> I0–I3 は<b>リアルタイムの fork-choice 軸</b>。一方 <b>状態遷移関数 Υ(S,B) はブロック処理軸</b>で、ブロックを処理する瞬間(ここでは I0)に走る。スロット n の受理票は集約として<b>次ブロック(n+1)に取り込まれ</b>、その Υ 処理時に初めて <b>state 上の justification が確定</b>する。よって justification は <b>1スロット遅れて</b>確定する(justified バッジが次スロットで付く＝この遅延)。</p>
+      <p><b>justification / finalization (§4,§6):</b> 取り込まれた集約票が <code>3·票 ≥ 2·総数</code> (2/3) を超えると対象ブロックは <b>justified</b>。justified が連続すると一つ前が <b>finalized</b> (不可逆)。</p>
+      <p><b>操作:</b> 「参加率」を 2/3 未満に下げると justification が止まる。検証者数・速度も変更可。「1スロット進める」で1歩ずつ。</p>`,
 
     /* ------------------------- state ------------------------- */
     width: 0,
@@ -71,7 +59,8 @@
     aggregateParticles: [],
     collectedSigs: 0,
     aggregatePulse: 0,
-    aggregateEmitted: false,
+    pendingAggregates: [],
+    upsilonApplied: [],
     currentSlot: 0,
     slotTimer: 0,
     interval: 0,
@@ -106,7 +95,8 @@
       this.aggregateParticles = [];
       this.collectedSigs = 0;
       this.aggregatePulse = 0;
-      this.aggregateEmitted = false;
+      this.pendingAggregates = [];
+      this.upsilonApplied = [];
       // Slot 0 is the genesis slot (no proposer); proposals begin at slot 1.
       this.currentSlot = 1;
       this.slotTimer = 0;
@@ -229,6 +219,9 @@
         weight: 0,
       };
       this.chain.push(block);
+      // I0 also processes the new block: Υ applies the aggregates it carries
+      // (the previous slot's votes), committing justification to state.
+      this.processStateTransition(block);
       this.votesAccrued = 0;
       for (const validator of this.validators) {
         validator.hasBlock = false;
@@ -254,7 +247,6 @@
       this.collectedSigs = 0;
       this.aggregateParticles = [];
       this.aggregatePulse = 0;
-      this.aggregateEmitted = false;
       // Pick a deterministic aggregator that collects the slot's attestations.
       this.aggregatorIndex = (this.currentSlot * 13 + 7) % this.validatorCount;
       // The attestation triple every voter signs this slot (§6.2):
@@ -268,13 +260,7 @@
       // Each attestation folds into the aggregator (§6.4). Votes stay PENDING —
       // held, not yet applied to fork choice — until acceptance in I3.
       for (const voter of voters) {
-        this.attestationDots.push({
-          voterIndex: voter.index,
-          fromX: this.vx(voter),
-          fromY: this.vy(voter),
-          t: 0,
-          duration: 0.6 + this.rng() * 0.5,
-        });
+        this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: 0.6 + this.rng() * 0.5 });
       }
     },
 
@@ -290,33 +276,43 @@
       for (const voter of this.voters || []) {
         if (voter.voteState === "pending") voter.voteState = "accepted";
       }
-      if (this.expectedVotes > 0) {
-        this.aggregateParticles.push({
-          t: 0,
-          duration: 0.8,
-          sigCount: this.collectedSigs,
-          toX: this.dotTarget ? this.dotTarget.x : this.netRight() + 40,
-          toY: this.dotTarget ? this.dotTarget.y : this.height - 110,
-        });
+      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
+      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
+    },
+
+    /** Slot end: the accepted votes become an aggregate, gossiped for inclusion
+     *  in the NEXT block. Justification is NOT committed here — Υ does that when
+     *  that next block is processed (one-slot lag between fork-choice and state). */
+    finishSlot() {
+      const block = this.chain[this.chain.length - 1];
+      block.weight = this.votesAccrued; // ephemeral fork-choice weight (live axis)
+      if (this.votesAccrued > 0) {
+        this.pendingAggregates.push({ targetSlot: block.slot, votes: this.votesAccrued });
       }
     },
 
-    finishSlot() {
-      const block = this.chain[this.chain.length - 1];
-      block.weight = this.votesAccrued;
-      // Justification: 3 * votes >= 2 * total validators.
-      if (3 * this.votesAccrued >= 2 * this.validatorCount) {
-        block.justified = true;
-        const previousJustified = this.chain.find((b) => b.slot === this.latestJustified);
-        this.latestJustified = block.slot;
-        // Finalization: a justified block directly justifying on the prior
-        // justified checkpoint finalizes that prior checkpoint.
-        if (previousJustified && previousJustified.justified) {
-          previousJustified.finalized = true;
-          this.latestFinalized = previousJustified.slot;
-          for (const b of this.chain) if (b.slot <= previousJustified.slot) b.finalized = true;
+    /** State transition Υ(S, B): applies the aggregates a block includes, so that
+     *  justification/finalization advance in state only when a block is processed. */
+    processStateTransition(newBlock) {
+      newBlock.included = this.pendingAggregates.slice();
+      this.upsilonApplied = [];
+      for (const agg of this.pendingAggregates) {
+        const target = this.chain.find((b) => b.slot === agg.targetSlot);
+        if (!target) continue;
+        target.stateWeight = agg.votes;
+        if (3 * agg.votes >= 2 * this.validatorCount && !target.justified) {
+          target.justified = true;
+          const previousJustified = this.chain.find((b) => b.slot === this.latestJustified);
+          this.latestJustified = target.slot;
+          this.upsilonApplied.push(target.slot);
+          if (previousJustified && previousJustified.justified && previousJustified.slot < target.slot) {
+            previousJustified.finalized = true;
+            this.latestFinalized = previousJustified.slot;
+            for (const b of this.chain) if (b.slot <= previousJustified.slot) b.finalized = true;
+          }
         }
       }
+      this.pendingAggregates = [];
     },
 
     advanceSlot() {
@@ -598,9 +594,29 @@
       }
     },
 
+    /** The Υ block-processing event (state axis), shown live during I0. */
+    renderUpsilonStatus(ctx, x, y) {
+      const active = this.interval === 0 && this.proposedThisSlot;
+      const block = this.chain[this.chain.length - 1];
+      const incl = (block && block.included) || [];
+      const justified = this.upsilonApplied || [];
+      draw.label(ctx, "状態遷移 Υ (ブロック処理軸):", x, y, active ? colors.nodeActive : colors.textDim, "11px ui-monospace, monospace", "left");
+      let msg;
+      if (!active) {
+        msg = "次の提案(I0)でブロックを処理し justification を確定";
+      } else if (incl.length === 0) {
+        msg = `block s${block ? block.slot : "?"} を処理 ▸ 取り込む集約なし`;
+      } else {
+        const aggs = incl.map((a) => `s${a.targetSlot}`).join(",");
+        msg = `block s${block.slot} を処理 ▸ incl agg(${aggs})` + (justified.length ? ` → s${justified.join(",s")} justified 確定` : " → 2/3未達");
+      }
+      draw.label(ctx, msg, x + 196, y, active ? colors.text : colors.textDim, "11px ui-monospace, monospace", "left");
+    },
+
     renderChain(ctx) {
       const y = this.height - 150;
       draw.label(ctx, "ブロックチェーン (§4) — parent_root 連結 / hash_tree_root (§2)", 30, y - 14, colors.textDim, "12px ui-monospace, monospace", "left");
+      this.renderUpsilonStatus(ctx, 30, y - 32);
       const boxWidth = 96;
       const gap = 16;
       const visible = this.chain.slice(-8);
@@ -735,10 +751,11 @@
         { label: "参加率", value: `${Math.round(this.participation * 100)}%` },
         { label: "票 (pending / accepted)", value: `${pending} / ${accepted}` },
         { label: "受理済み得票", value: `${this.votesAccrued} / ${this.validatorCount} (${percent}%)` },
-        { label: "2/3 到達", value: reached ? "はい (justify)" : "いいえ" },
+        { label: "2/3 到達", value: reached ? "はい (→次Υで justify)" : "いいえ" },
         { label: "aggregator", value: this.attestedThisSlot ? `#${this.aggregatorIndex} (集約 ${this.aggregatingCount || 0})` : "—" },
         { label: "safe target", value: this.safeTargetThisSlot ? `slot ${this.safeTargetSlot}` : "—" },
-        { label: "latest justified", value: `slot ${this.latestJustified}` },
+        { label: "pending 集約 (Υ待ち)", value: (this.pendingAggregates || []).map((a) => `s${a.targetSlot}(${a.votes})`).join(",") || "—" },
+        { label: "latest justified (Υ)", value: `slot ${this.latestJustified}` },
         { label: "latest finalized", value: `slot ${this.latestFinalized}` },
       ];
     },
