@@ -22,11 +22,12 @@
   const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
   const INTERVAL_COUNT = 4;
 
+  // The four-interval slot pipeline (spec §3.2.1 / Fig 3.2).
   const INTERVAL_NARRATION = [
-    "Interval 0 — 提案者がブロックを生成し P2P で配信 (§3,§5)。提案者の票も同梱。",
-    "Interval 1 — 検証者が attestation を生成: head / source / target を署名 (§6.2)。",
-    "Interval 2 — aggregator が同一票を集約 (1署名へ)。セーフターゲットを計算 (§6.4)。",
-    "Interval 3 — 票を受理しフォーク選択ヘッドを更新。次スロットで取り込み (§6.3)。",
+    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信。自分の票も同梱 (§3,§5)。",
+    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留。aggregator が並行して集約 (§6.4)。",
+    "Interval 2 — Safe Target Update: 票を数える前に、直近で 2/3 を集めたブロック (セーフターゲット) を確定し視点を安定化。",
+    "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。重み更新→ヘッド再計算 (§6.3)。",
   ];
 
   const scene = {
@@ -38,15 +39,18 @@
       プロトコルが「生きたチェーン」として動く様子を観察できる。</p>
       <p>毎スロット、4つのインターバル(§3)が次を駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 (I0):</b> 提案者がブロックを作り、検証者メッシュへ伝播 (§5)。
+        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り、検証者メッシュへ伝播 (§5)。
         各ブロックは <code>parent_root</code> で連結し、<code>hash_tree_root</code>(§2) を持つ。</li>
-        <li><b>投票 (I1):</b> 検証者が attestation を生成。
-        <code>source</code>(直近justified) → <code>target</code>(今回のブロック) → <code>head</code> (§6.2)。</li>
-        <li><b>集約 (I2):</b> aggregator が同一 AttestationData の票を集約 (§6.4)。
-        多数の XMSS 署名(耐量子)を1本の集約署名 <code>Sagg</code> に圧縮し、誰が投票したかは
-        <b>参加ビットフィールド</b>で記録する。右の「集約 Aggregate」パネルが Fig 6.4 の集約オブジェクト
-        (source/target/head + bitfield + N→1) をライブ表示。</li>
-        <li><b>受理 (I3):</b> フォーク選択ヘッドを更新。スロット終了時に判定。</li>
+        <li><b>投票 Attestation Broadcast (I1):</b> 検証者が attestation を配信。
+        <code>source</code>(直近justified) → <code>target</code>(今回のブロック) → <code>head</code> (§6.2)。
+        <b>票はこの時点では pending</b>(保留)で、まだ fork choice には反映しない。
+        並行して aggregator が同一票を集約 (§6.4): 多数の XMSS 署名を1本 <code>Sagg</code> に圧縮し、
+        参加ビットフィールドに記録(右の「集約 Aggregate」パネル / Fig 6.4)。</li>
+        <li><b>セーフターゲット Safe Target Update (I2):</b> 新しい票を数える前に、
+        <b>直近で 2/3 を集めたブロック(セーフターゲット)を確定</b>して視点を安定化させ、
+        chaotic な reorg を防ぐ。チェーン上で <code>safe ▸</code> として強調。</li>
+        <li><b>受理 Attestation Acceptance (I3):</b> pending の票を受理して fork choice に投入。
+        集約署名がチェーンに取り込まれ、得票バーが埋まり、ヘッドを再計算する。</li>
       </ol>
       <p><b>justification / finalization (§4,§6):</b> 1スロットの票が
       <code>3·票 ≥ 2·総数</code> (2/3) を超えるとそのブロックは <b>justified</b>。
@@ -78,8 +82,11 @@
     votesAccrued: 0,
     latestJustified: 0,
     latestFinalized: 0,
+    safeTargetSlot: 0,
     proposedThisSlot: false,
     attestedThisSlot: false,
+    safeTargetThisSlot: false,
+    acceptedThisSlot: false,
 
     /* ------------------------- lifecycle ------------------------- */
     init(env) {
@@ -107,8 +114,11 @@
       this.votesAccrued = 0;
       this.latestJustified = 0;
       this.latestFinalized = 0;
+      this.safeTargetSlot = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.safeTargetThisSlot = false;
+      this.acceptedThisSlot = false;
       this.buildValidators();
       // Genesis block (slot 0): justified + finalized by definition.
       this.chain = [
@@ -143,7 +153,7 @@
           }
         }
         if (tooClose) continue;
-        nodes.push({ index: nodes.length, nx, ny, online: true, hasBlock: false });
+        nodes.push({ index: nodes.length, nx, ny, online: true, hasBlock: false, voteState: "none" });
       }
       // Guarantee exactly validatorCount nodes (relax spacing if needed) so
       // proposer indexing and the 2/3 threshold always use the real count.
@@ -154,6 +164,7 @@
           ny: 0.12 + this.rng() * 0.72,
           online: true,
           hasBlock: false,
+          voteState: "none",
         });
       }
       this.validators = nodes;
@@ -221,7 +232,7 @@
       this.votesAccrued = 0;
       for (const validator of this.validators) {
         validator.hasBlock = false;
-        validator.voted = false;
+        validator.voteState = "none";
       }
       const proposer = this.validators[proposerIndex];
       if (proposer) proposer.hasBlock = true;
@@ -237,6 +248,7 @@
       }
     },
 
+    /** I1 — Attestation Broadcast: attesters vote; the aggregator collects. */
     castAttestations() {
       this.attestedThisSlot = true;
       this.collectedSigs = 0;
@@ -251,8 +263,10 @@
       const source = this.chain.find((b) => b.slot === this.latestJustified) || this.chain[0];
       this.attestTriple = { sourceSlot: source.slot, targetSlot: block.slot };
       const voters = this.validators.filter((v) => v.online && this.rng() < this.participation);
+      this.voters = voters;
       this.expectedVotes = voters.length;
-      // Each voter sends an attestation dot: voter → aggregator → chain.
+      // Each attestation folds into the aggregator (§6.4). Votes stay PENDING —
+      // held, not yet applied to fork choice — until acceptance in I3.
       for (const voter of voters) {
         this.attestationDots.push({
           voterIndex: voter.index,
@@ -260,7 +274,29 @@
           fromY: this.vy(voter),
           t: 0,
           duration: 0.6 + this.rng() * 0.5,
-          counted: false,
+        });
+      }
+    },
+
+    /** I2 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
+    updateSafeTarget() {
+      this.safeTargetThisSlot = true;
+      this.safeTargetSlot = this.latestJustified;
+    },
+
+    /** I3 — Attestation Acceptance: held votes are applied; the aggregate lands. */
+    acceptAttestations() {
+      this.acceptedThisSlot = true;
+      for (const voter of this.voters || []) {
+        if (voter.voteState === "pending") voter.voteState = "accepted";
+      }
+      if (this.expectedVotes > 0) {
+        this.aggregateParticles.push({
+          t: 0,
+          duration: 0.8,
+          sigCount: this.collectedSigs,
+          toX: this.dotTarget ? this.dotTarget.x : this.netRight() + 40,
+          toY: this.dotTarget ? this.dotTarget.y : this.height - 110,
         });
       }
     },
@@ -290,6 +326,8 @@
       this.interval = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.safeTargetThisSlot = false;
+      this.acceptedThisSlot = false;
       this.votesAccrued = 0;
     },
 
@@ -309,6 +347,8 @@
       this.interval = interval;
       if (interval >= 0 && !this.proposedThisSlot) this.proposeBlock();
       if (interval >= 1 && !this.attestedThisSlot) this.castAttestations();
+      if (interval >= 2 && !this.safeTargetThisSlot) this.updateSafeTarget();
+      if (interval >= 3 && !this.acceptedThisSlot) this.acceptAttestations();
     },
 
     advanceParticles(dt) {
@@ -325,16 +365,15 @@
       this.aggY = aggregator ? this.vy(aggregator) : this.netBottom();
       this.dotTarget = { x: this.netRight() + 40, y: this.height - 110 };
 
-      // Phase A — individual signatures travel voter → aggregator and merge.
+      // I1 — attestations fold into the aggregator; each marks its voter PENDING
+      // (collected and merged, but not yet applied to fork choice).
       const survivingDots = [];
       for (const dot of this.attestationDots) {
         dot.t += dt / dot.duration;
         if (dot.t >= 1) {
           this.collectedSigs += 1;
-          this.votesAccrued = Math.min(this.expectedVotes || 0, this.votesAccrued + 1);
-          if (block) block.weight = this.votesAccrued;
           const voter = this.validators[dot.voterIndex];
-          if (voter) voter.voted = true;
+          if (voter && voter.voteState === "none") voter.voteState = "pending";
           this.aggregatePulse = 1; // flash the aggregator as each signature folds in
         } else {
           survivingDots.push(dot);
@@ -343,22 +382,13 @@
       this.attestationDots = survivingDots;
       this.aggregatePulse = Math.max(0, this.aggregatePulse - dt * 3.5);
 
-      // Once the whole batch is folded in, emit ONE aggregate signature to chain.
-      if (!this.aggregateEmitted && this.expectedVotes > 0 && this.collectedSigs >= this.expectedVotes) {
-        this.aggregateEmitted = true;
-        this.aggregateParticles.push({
-          t: 0,
-          duration: 0.8,
-          sigCount: this.collectedSigs,
-          toX: this.dotTarget.x,
-          toY: this.dotTarget.y,
-        });
-      }
-
-      // Phase B — the single merged aggregate travels aggregator → chain.
+      // I3 — the accepted aggregate is included in the chain; only now does the
+      // vote count (the weight bar) fill, as the bundle travels to the block.
       const survivingBundles = [];
       for (const bundle of this.aggregateParticles) {
         bundle.t += dt / bundle.duration;
+        this.votesAccrued = Math.round(bundle.sigCount * util.clamp(bundle.t, 0, 1));
+        if (block) block.weight = this.votesAccrued;
         if (bundle.t < 1) survivingBundles.push(bundle);
       }
       this.aggregateParticles = survivingBundles;
@@ -379,15 +409,14 @@
 
     stepOneSlot() {
       this.auto = false;
-      // Run proposal + attestations immediately, accrue all votes, then finish.
+      // Run the whole pipeline (propose → broadcast → safe target → accept).
       if (!this.proposedThisSlot) this.proposeBlock();
       if (!this.attestedThisSlot) this.castAttestations();
-      for (const dot of this.attestationDots) {
-        const voter = this.validators[dot.voterIndex];
-        if (voter) voter.voted = true;
-      }
-      this.votesAccrued = this.expectedVotes || 0;
       this.collectedSigs = this.expectedVotes || 0;
+      for (const voter of this.voters || []) voter.voteState = "accepted";
+      if (!this.safeTargetThisSlot) this.updateSafeTarget();
+      this.acceptedThisSlot = true;
+      this.votesAccrued = this.expectedVotes || 0;
       this.attestationDots = [];
       this.aggregateParticles = [];
       this.advanceSlot();
@@ -409,7 +438,7 @@
       const right = this.width - 30;
       const segWidth = (right - left) / INTERVAL_COUNT;
       draw.label(ctx, `Slot ${this.currentSlot}`, left, top + 2, colors.nodeSource, "bold 15px ui-monospace, monospace", "left");
-      const labels = ["I0 提案", "I1 投票", "I2 集約", "I3 受理"];
+      const labels = ["I0 提案", "I1 投票", "I2 セーフターゲット", "I3 受理"];
       for (let i = 0; i < INTERVAL_COUNT; i++) {
         const x = left + i * segWidth;
         const active = i === this.interval;
@@ -486,7 +515,8 @@
           draw.disc(ctx, x, y, 6, colors.nodeDead, "#4a3340", 1);
           continue;
         }
-        let fill = node.voted ? colors.nodeHasMessage : colors.node;
+        // pending (held, I1) = amber; accepted (applied, I3) = green.
+        let fill = node.voteState === "accepted" ? colors.nodeHasMessage : node.voteState === "pending" ? colors.iwant : colors.node;
         let stroke = colors.nodeStroke;
         if (node.index === this.aggregatorIndex && aggregatorActive) {
           // A pulse ring expands each time a signature folds into the aggregate.
@@ -515,7 +545,7 @@
      */
     renderAggregatePanel(ctx) {
       const x = this.netRight() + 20;
-      const y = this.netTop() + 132;
+      const y = this.netTop() + 144;
       const width = this.width - x - 28;
       const height = 152;
       if (width < 190 || y + height > this.height - 170) return;
@@ -534,11 +564,11 @@
       const triple = this.attestTriple || { sourceSlot: this.latestJustified, targetSlot: head ? head.slot : 0 };
       draw.label(ctx, `AttestationData  source s${triple.sourceSlot} · target s${triple.targetSlot} · head ${head ? head.root : "—"}`,
         x + 12, y + 36, colors.textDim, "10px ui-monospace, monospace", "left");
-      draw.label(ctx, "participation bitfield (1=投票済 / 0=未):", x + 12, y + 56, colors.textDim, "10px ui-monospace, monospace", "left");
+      draw.label(ctx, "participation bitfield (橙=pending / 緑=accepted):", x + 12, y + 56, colors.textDim, "10px ui-monospace, monospace", "left");
       this.renderBitfield(ctx, x + 12, y + 66, width - 24);
 
-      const pop = this.validators.filter((v) => v.voted).length;
-      draw.label(ctx, `${pop} XMSS署名 → 1 集約署名 (Sagg)`, x + 12, y + height - 28, colors.graft, "11px ui-monospace, monospace", "left");
+      const pop = this.validators.filter((v) => v.voteState !== "none").length;
+      draw.label(ctx, `${this.collectedSigs} XMSS署名 → 1 集約署名 (Sagg)`, x + 12, y + height - 28, colors.graft, "11px ui-monospace, monospace", "left");
       draw.label(ctx, `popcount = ${pop} / ${this.validatorCount}`, x + 12, y + height - 13, colors.text, "10px ui-monospace, monospace", "left");
     },
 
@@ -553,17 +583,18 @@
         const cx = x + col * (cell + gap);
         const cy = y + row * (cell + gap);
         const node = this.validators[i];
-        const bit = node && node.voted ? 1 : 0;
+        const state = node ? node.voteState : "none";
         const online = node ? node.online : true;
+        const color = state === "accepted" ? colors.nodeHasMessage : state === "pending" ? colors.iwant : null;
         ctx.save();
         draw.roundedRect(ctx, cx, cy, cell, cell, 3);
-        ctx.fillStyle = bit ? colors.nodeHasMessage + "55" : online ? "#15202f" : "#2a1822";
+        ctx.fillStyle = color ? color + "55" : online ? "#15202f" : "#2a1822";
         ctx.fill();
-        ctx.strokeStyle = bit ? colors.nodeHasMessage : online ? colors.grid : "#4a3340";
+        ctx.strokeStyle = color || (online ? colors.grid : "#4a3340");
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.restore();
-        if (cell >= 12) draw.label(ctx, String(bit), cx + cell / 2, cy + cell / 2, bit ? colors.nodeHasMessage : colors.textDim, "9px ui-monospace, monospace");
+        if (cell >= 12) draw.label(ctx, color ? "1" : "0", cx + cell / 2, cy + cell / 2, color || colors.textDim, "9px ui-monospace, monospace");
       }
     },
 
@@ -603,6 +634,10 @@
         draw.label(ctx, block.slot === 0 ? "genesis" : `slot ${block.slot}`, x + boxWidth / 2, y + 13, colors.text, "11px ui-monospace, monospace");
         draw.label(ctx, `root ${block.root}`, x + boxWidth / 2, y + 29, colors.textDim, "10px ui-monospace, monospace");
         if (badge) draw.label(ctx, badge, x + boxWidth / 2, y + 45, stroke, "10px ui-monospace, monospace");
+        // I2 safe target: the anchor block (latest 2/3 majority) before counting.
+        if (this.safeTargetThisSlot && block.slot === this.safeTargetSlot) {
+          draw.label(ctx, "◆ safe target", x + boxWidth / 2, y - 4, colors.nodeActive, "10px ui-monospace, monospace");
+        }
         if (previousCenter !== null) {
           draw.arrow(ctx, x - 2, y + 28, previousCenter + 2, y + 28, colors.textDim, 1.2);
         }
@@ -661,10 +696,11 @@
     renderLegend(ctx) {
       const items = [
         ["提案ブロック伝播", colors.data],
-        ["attestation (voter→agg)", colors.ihave],
-        ["aggregator / 集約済み票", colors.graft],
-        ["提案者 / target・head", colors.nodeSource],
-        ["投票済み検証者 / finalized", colors.nodeHasMessage],
+        ["attestation → aggregator", colors.ihave],
+        ["集約署名 (Sagg)", colors.graft],
+        ["pending 投票 (I1)", colors.iwant],
+        ["accepted / finalized", colors.nodeHasMessage],
+        ["safe target (I2)", colors.nodeActive],
         ["2/3 閾値", colors.nodeTarget],
       ];
       let y = this.netTop() + 4;
@@ -682,7 +718,6 @@
         draw.label(ctx, text, x + 16, y, colors.textDim, "11px ui-monospace, monospace", "left");
         y += 18;
       }
-      draw.label(ctx, "右下: チェーンと得票バー", x, y + 2, colors.textDim, "10px ui-monospace, monospace", "left");
     },
 
     onMouse() {},
@@ -691,16 +726,20 @@
     getStats() {
       const reached = 3 * this.votesAccrued >= 2 * this.validatorCount;
       const percent = this.validatorCount ? Math.round((this.votesAccrued / this.validatorCount) * 100) : 0;
+      const phase = ["提案", "投票 (pending)", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
+      const pending = this.validators.filter((v) => v.voteState === "pending").length;
+      const accepted = this.validators.filter((v) => v.voteState === "accepted").length;
       return [
-        { label: "スロット / インターバル", value: `${this.currentSlot} / I${this.interval}` },
+        { label: "スロット / インターバル", value: `${this.currentSlot} / I${this.interval} ${phase}` },
         { label: "検証者数", value: `${this.validatorCount} (online ${this.onlineCount()})` },
         { label: "参加率", value: `${Math.round(this.participation * 100)}%` },
-        { label: "今スロット得票", value: `${this.votesAccrued} / ${this.validatorCount} (${percent}%)` },
+        { label: "票 (pending / accepted)", value: `${pending} / ${accepted}` },
+        { label: "受理済み得票", value: `${this.votesAccrued} / ${this.validatorCount} (${percent}%)` },
         { label: "2/3 到達", value: reached ? "はい (justify)" : "いいえ" },
         { label: "aggregator", value: this.attestedThisSlot ? `#${this.aggregatorIndex} (集約 ${this.aggregatingCount || 0})` : "—" },
+        { label: "safe target", value: this.safeTargetThisSlot ? `slot ${this.safeTargetSlot}` : "—" },
         { label: "latest justified", value: `slot ${this.latestJustified}` },
         { label: "latest finalized", value: `slot ${this.latestFinalized}` },
-        { label: "ブロック数", value: this.chain.length },
       ];
     },
 

@@ -33,12 +33,12 @@
   };
 
   // The four per-slot intervals (§3) that drive the fork-choice cycle.
-  const INTERVAL_LABELS = ["I0 提案", "I1 投票", "I2 集約", "I3 フォーク選択"];
+  const INTERVAL_LABELS = ["I0 提案", "I1 投票", "I2 セーフターゲット", "I3 フォーク選択"];
   const INTERVAL_NARRATION = [
-    "Interval 0 — 提案者がブロックを生成し配信 (§3,§5)。フォーク時は枝が分岐する。",
-    "Interval 1 — 各検証者が attestation を投票。票が枝ごとに分かれる (§6.2)。",
-    "Interval 2 — 票を集約し、各枝・各ブロックの重みを更新 (§6.4)。",
-    "Interval 3 — GHOST フォーク選択でヘッドを再計算し reorg / justify を判定 (§6.3)。",
+    "Interval 0 — Block Proposal: 提案者がブロックを生成し配信 (§3,§5)。フォーク時は枝が分岐する。",
+    "Interval 1 — Attestation Broadcast: 各検証者が attestation を投票。票が枝ごとに分かれる (§6.2)。",
+    "Interval 2 — Safe Target Update: 直近で 2/3 を集めたブロック (セーフターゲット) を確定して視点を安定化。",
+    "Interval 3 — Attestation Acceptance: 票を受理し GHOST フォーク選択でヘッド再計算、reorg / justify を判定 (§6.3)。",
   ];
 
   const scene = {
