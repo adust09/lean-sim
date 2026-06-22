@@ -48,7 +48,15 @@
       </ol>
       <p><b>2つの軸:</b> I0–I3 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
       <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
-      <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>`,
+      <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
+      <p><b>色凡例:</b><br>
+      <span style="color:#36d399">●</span> 提案ブロック伝播 / accepted / finalized &nbsp;
+      <span style="color:#a78bfa">●</span> attestation→aggregator &nbsp;
+      <span style="color:#22d3ee">●</span> 集約署名 (Sagg) &nbsp;
+      <span style="color:#f59e0b">●</span> pending 投票 (I1) &nbsp;
+      <span style="color:#2f6df6">●</span> 枝A (群0) 票 &nbsp;
+      <span style="color:#f6a52f">●</span> 枝B (群1) 票 &nbsp;
+      <span style="color:#f87171">●</span> safe target / 2/3 閾値</p>`,
 
     /* ------------------------- state ------------------------- */
     width: 0,
@@ -365,7 +373,6 @@
       this.renderAggregatePanel(ctx);
       this.renderUpsilonPipeline(ctx);
       this.renderChain(ctx);
-      this.renderLegend(ctx);
     },
 
     renderClock(ctx) {
@@ -589,33 +596,6 @@
       draw.line(ctx, thresholdX, y - 3, thresholdX, y + 19, colors.nodeTarget, 2, false);
       draw.label(ctx, "2/3", thresholdX, y + 28, colors.nodeTarget, "10px ui-monospace, monospace");
       draw.label(ctx, `${this.votesAccrued} / ${this.validatorCount}`, x + barWidth + 8, y + 8, colors.text, "11px ui-monospace, monospace", "left");
-    },
-
-    renderLegend(ctx) {
-      const items = [
-        ["提案ブロック伝播", colors.data],
-        ["attestation → aggregator", colors.ihave],
-        ["集約署名 (Sagg)", colors.graft],
-        ["pending 投票 (I1)", colors.iwant],
-        ["accepted / finalized", colors.nodeHasMessage],
-        ["枝A 群0 票 / 枝B 群1 票", BRANCH_COLOR[0]],
-        ["safe target / 2/3 閾値", colors.nodeTarget],
-      ];
-      let y = this.netTop() + 4;
-      const x = this.netRight() + 24;
-      ctx.save();
-      ctx.globalAlpha = 0.94;
-      draw.roundedRect(ctx, x - 10, y - 14, 232, items.length * 18 + 14, 8);
-      ctx.fillStyle = "#0e1420cc";
-      ctx.fill();
-      ctx.restore();
-      draw.label(ctx, "凡例", x, y, colors.textDim, "11px ui-monospace, monospace", "left");
-      y += 18;
-      for (const [text, color] of items) {
-        draw.disc(ctx, x + 4, y, 4, color, null);
-        draw.label(ctx, text, x + 16, y, colors.textDim, "11px ui-monospace, monospace", "left");
-        y += 18;
-      }
     },
 
     onMouse() {},

@@ -51,7 +51,14 @@
       <p><b>下段ルーラー (§6.5.3.2):</b>
       <span style="color:#36d399">δ≤5 即時窓</span> /
       <span style="color:#a78bfa">平方・長方形数</span> /
-      <span style="color:#f87171">無効ギャップ</span></p>`,
+      <span style="color:#f87171">無効ギャップ</span></p>
+      <p><b>色凡例:</b><br>
+      <span style="color:#36d399">●</span> F 確定 (Finalized) &nbsp;
+      <span style="color:#22d3ee">●</span> J 正当化済み &nbsp;
+      <span style="color:#a78bfa">●</span> Target (候補) &nbsp;
+      <span style="color:#36d399">●</span> Source リング &nbsp;
+      <span style="color:#60a5fa">●</span> Head 囲み &nbsp;
+      <span style="color:#f87171">●</span> フォーク枝</p>`,
 
     width: 0, height: 0, rng: null,
     blocks: [], nextBlockId: 0,
@@ -386,29 +393,10 @@
 
     renderLegend(ctx) {
       const legendX = this.width - LEGEND_WIDTH + 8;
-      const legendY = TREE_TOP_MARGIN;
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      draw.roundedRect(ctx, legendX - 8, legendY - 8, LEGEND_WIDTH, 130, 8);
-      ctx.fillStyle = "#0e1420cc";
-      ctx.fill();
-      ctx.restore();
-
-      const legendItems = [
-        ["F 確定 (Finalized)", C_FINALIZED], ["J 正当化済み", C_JUSTIFIED],
-        ["Target (候補)", C_CHECKPOINT], ["Source リング", C_SOURCE_LINK],
-        ["Head 囲み", C_HEAD_ARROW], ["フォーク枝", C_FORK],
-      ];
-      let currentY = legendY + 6;
-      for (const [legendText, legendColor] of legendItems) {
-        draw.disc(ctx, legendX + 4, currentY, 4, legendColor, null);
-        draw.label(ctx, legendText, legendX + 14, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
-        currentY += 17;
-      }
       const threshold = this.supermajorityThreshold();
       const targetBlock = this.blockById(this.targetBlockId);
       const currentVotes = targetBlock ? targetBlock.votes : 0;
-      currentY += 4;
+      let currentY = TREE_TOP_MARGIN;
       draw.label(ctx, `票: ${currentVotes}/${this.totalValidators} (${Math.round(currentVotes / this.totalValidators * 100)}%)`,
         legendX, currentY, this.voteFlash > 0.3 ? C_TARGET_RING : colors.text, "11px ui-monospace,monospace", "left");
       currentY += 16;

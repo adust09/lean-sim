@@ -73,7 +73,11 @@
       </ul>
       <p><b>インターバル締切の効果:</b> Lean Consensus は「Interval 0 終了後に届いたブロックは
       時機を逸した（untimely）」と見なして棄却します。これにより提案者が遅延させても
-      報酬を得られなくなり、タイミングゲームを中和します。</p>`,
+      報酬を得られなくなり、タイミングゲームを中和します。</p>
+      <p><b>色凡例 (グラフの線):</b><br>
+      <span style="color:#36d399">―</span> 早期提案 (参考) &nbsp;
+      <span style="color:#f59e0b">―</span> 遅延提案 (参考) &nbsp;
+      <span style="color:#60a5fa">―</span> あなたの提案</p>`,
 
     /* ---- state ---- */
     width: 0,
@@ -138,7 +142,6 @@
     render(ctx) {
       draw.clear(ctx, this.width, this.height);
       this.renderPlot(ctx);
-      this.renderLegend(ctx);
       this.renderVerdict(ctx);
     },
 
@@ -360,43 +363,6 @@
       }
       ctx.stroke();
       ctx.restore();
-    },
-
-    /* ---- legend ---- */
-    renderLegend(ctx) {
-      const legendLeft = this.plotLeft(this.width);
-      const legendTop = this.plotBottom(this.height) + 60;
-      const itemSpacing = Math.floor((this.plotRight(this.width) - legendLeft) / 3);
-
-      const legendItems = [
-        {
-          color: colors.nodeHasMessage,
-          label: `早期提案 p=${REFERENCE_EARLY_PUBLISH_TIME}s（参考）`,
-          visible: this.showReferenceEarlyPublish,
-        },
-        {
-          color: colors.iwant,
-          label: `遅延提案 p=${REFERENCE_LATE_PUBLISH_TIME}s（参考）`,
-          visible: this.showReferenceLatePublish,
-        },
-        { color: colors.accent, label: `あなたの提案 p=${this.publishTime.toFixed(2)}s`, visible: true },
-      ];
-
-      for (let legendIndex = 0; legendIndex < legendItems.length; legendIndex++) {
-        const legendItem = legendItems[legendIndex];
-        if (!legendItem.visible) continue;
-        const xPos = legendLeft + legendIndex * itemSpacing;
-        draw.line(ctx, xPos, legendTop + 6, xPos + 24, legendTop + 6, legendItem.color, 2.5, false);
-        draw.label(
-          ctx,
-          legendItem.label,
-          xPos + 28,
-          legendTop + 6,
-          legendItem.visible ? colors.text : colors.textDim,
-          "10px ui-monospace, monospace",
-          "left",
-        );
-      }
     },
 
     /* ---- timely verdict badge ---- */
