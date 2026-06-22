@@ -1,50 +1,134 @@
 /*
- * lifecycle.js — Capstone dashboard: §5.2–5.5 motions running side by side.
+ * lifecycle.js — Capstone: one node's journey, network join → block production.
  *
- * Instead of one sequential storyline, this scene is a *compositor* that drives
- * the four chapter scenes simultaneously in a 2x2 grid, so the whole P2P layer
- * is visible at a glance:
- *   ┌─ §5.2 Discovery v5 ──┬─ §5.3 QUIC transport ─┐
- *   ├─ §5.4 Gossipsub ─────┴─ §5.5 Request-Resp ───┤
+ * A single end-to-end scenario you can take in at a glance. The top of the
+ * screen is an always-visible stage pipeline (the bird's-eye overview):
  *
- * Each cell reuses the original scene object unchanged. We give it a private
- * viewport (the cell minus a header strip), clip the canvas to that rectangle,
- * translate the origin, then call the scene's own update()/render(). A single
- * global clock (speed x dt) feeds every sub-scene, and a thin loop controller
- * restarts each motion when it finishes so the dashboard stays alive.
+ *   ①発見 → ②接続 → ③同期 → ④購読 → ⑤ブロック生成
+ *
+ * The large panel below replays the *actual* §5.2–5.5 motion for whichever
+ * stage is active, reusing the chapter scene objects unchanged: we clip the
+ * canvas to the stage panel, translate the origin, and call that scene's own
+ * update()/render(). The scenario advances automatically (each stage ends when
+ * its motion completes) and loops, so the whole life of a node reads as one
+ * continuous story rather than four separate demos.
+ *
+ * Stage → reused scene:
+ *   ①発見  §5.2 Discovery v5      (discovery)
+ *   ②接続  §5.3 QUIC 1-RTT        (quic, RTT view)
+ *   ③同期  §5.5 Status + sync      (reqresp)
+ *   ④購読  §5.4 GRAFT into mesh    (gossipsub, no block yet)
+ *   ⑤生成  §5.4 publish + flood    (gossipsub, same network)
  */
 "use strict";
 
 (function registerLifecycle() {
   const { util, draw, colors } = P2P;
 
-  const MARGIN = 8;
-  const GAP = 8;
-  const HEADER = 24; // title strip height reserved at the top of every cell
+  const MARGIN = 10;
+  const BAR_TOP = 14;
+  const SEG_HEIGHT = 36;
+  const NARRATION_HEIGHT = 24;
+  const HEADER = 24; // stage-panel title strip
+  const END_HOLD = 1.6; // pause on the final stage before looping
 
-  // Loop cadence (simulated seconds) for the motions that do not self-repeat.
-  const DISCOVERY_RESTART_DELAY = 1.6;
-  const GOSSIP_PUBLISH_INTERVAL = 3.2;
-  const REQRESP_RESTART_DELAY = 1.4;
-  const QUIC_END = { hol: 5.6, rtt: 6.6 };
+  const QUIC_RTT_END = 6.0;
+
+  const STAGES = [
+    {
+      no: "①",
+      label: "発見",
+      section: "5.2",
+      sceneKey: "discovery",
+      narration: "起動直後の自ノードは孤立。Discovery v5 の XOR 探索で、同じチェーンを追うピアを見つける。",
+      onEnter() {
+        const scene = P2P.scenes.discovery;
+        scene.autoPlay = true;
+        scene.startLookup();
+      },
+      isDone(host) {
+        return P2P.scenes.discovery.lookup.finished || host.stageTime > 9;
+      },
+    },
+    {
+      no: "②",
+      label: "接続",
+      section: "5.3",
+      sceneKey: "quic",
+      narration: "見つけたピアへ QUIC で接続。TLS を統合し 1-RTT(セッション再開なら 0-RTT)で即データを送れる。",
+      onEnter() {
+        const scene = P2P.scenes.quic;
+        scene.view = "rtt";
+        scene.replay();
+      },
+      isDone(host) {
+        return P2P.scenes.quic.clock >= QUIC_RTT_END || host.stageTime > 8;
+      },
+    },
+    {
+      no: "③",
+      label: "同期",
+      section: "5.5",
+      sceneKey: "reqresp",
+      narration: "接続直後に Status を交換(fork digest ゲート)。相手が進んでいれば BeaconBlocksByRange で不足ブロックを取り寄せる。",
+      onEnter() {
+        const scene = P2P.scenes.reqresp;
+        scene.autoPlay = true;
+        scene.build();
+      },
+      isDone(host) {
+        const scene = P2P.scenes.reqresp;
+        return scene.clock >= scene.endTime || host.stageTime > 15;
+      },
+    },
+    {
+      no: "④",
+      label: "購読",
+      section: "5.4",
+      sceneKey: "gossipsub",
+      narration: "トピックを購読し GRAFT で mesh に参加。heartbeat が mesh サイズを保つ(GRAFT / PRUNE)。",
+      onEnter() {
+        P2P.scenes.gossipsub.clearMessage();
+      },
+      isDone(host) {
+        return host.stageTime >= 5;
+      },
+    },
+    {
+      no: "⑤",
+      label: "ブロック生成",
+      section: "5.4",
+      sceneKey: "gossipsub",
+      narration: "一人前の参加者に。自ノードがブロックを発行し、eager push が mesh を伝って全体へ広がる。",
+      onEnter() {
+        const gossip = P2P.scenes.gossipsub;
+        const alive = gossip.nodes.filter((node) => node.alive);
+        if (alive.length) gossip.publishFrom(util.pickRandom(gossip.rng, alive).index);
+      },
+      isDone(host) {
+        return host.stageTime >= 7;
+      },
+    },
+  ];
 
   const scene = {
     id: "lifecycle",
-    title: "ダッシュボード",
+    title: "ノードの一生",
     sectionRef: "5.2–5.5",
     descriptionHTML: `
-      <p><b>P2P レイヤーの総まとめ。</b>5.2〜5.5 の4つのモーションを 2×2 グリッドで
-      <b>同時に</b>動かし、章全体を一望できるダッシュボードにしたもの。各セルは個別タブと
-      同じシミュレーションをそのまま流用している。</p>
-      <ul style="padding-left:18px;margin:0 0 9px">
-        <li><b>§5.2 Discovery v5(左上):</b> XOR 距離の漏斗状探索。収束すると自動で次の探索へ。</li>
-        <li><b>§5.3 QUIC(右上):</b> HOL ブロッキングとハンドシェイク RTT を交互にループ再生。</li>
-        <li><b>§5.4 Gossipsub(左下):</b> mesh への eager push と lazy pull。一定間隔で自動発行。</li>
-        <li><b>§5.5 Request-Response(右下):</b> Status 交換 → BeaconBlocksByRange の同期シーケンス。</li>
-      </ul>
-      <p><b>操作:</b>「再生/一時停止」で全体を停止、速度スライダーは全モーション共通。
-      各セルの中をクリックすると、そのモーションを直接操作できる
-      (探索ノードの選択 / Gossip ブロック発行)。</p>
+      <p><b>1つのノードが Network に参加してからブロックを生成するまで</b>を、1本の
+      シナリオとして俯瞰する総まとめ。上部のパイプラインが全行程、下の大パネルが
+      現在の段階の実モーション(5.2〜5.5 の各タブと同じシミュレーション)。</p>
+      <ol style="padding-left:18px;margin:0 0 9px">
+        <li><b>発見 (§5.2):</b> Discovery v5 の XOR 探索でピアを見つける。</li>
+        <li><b>接続 (§5.3):</b> QUIC で 1-RTT 接続。</li>
+        <li><b>同期 (§5.5):</b> Status 交換 → BeaconBlocksByRange で不足ブロックを取得。</li>
+        <li><b>購読 (§5.4):</b> GRAFT して gossip mesh に参加。</li>
+        <li><b>ブロック生成 (§5.4):</b> ブロックを発行し mesh を伝播 → 全体へ。</li>
+      </ol>
+      <p>各段階はモーションが終わると自動で次へ進み、最後まで行くと最初へループする。
+      「次のステージ ▶」で手動送り、「再生/一時停止」で全体を停止。
+      下パネル内をクリックすると、その仕組みを直接操作できる。</p>
       <p>1つの仕組みをじっくり見たいときは、上部の個別タブ(Discovery / QUIC / …)へ。</p>`,
 
     /* ------------------------- state ------------------------- */
@@ -52,162 +136,150 @@
     height: 0,
     paused: false,
     speed: 1,
-    entries: [],
-
-    // loop controllers
-    discoveryCooldown: 0,
-    gossipTimer: 0,
-    reqrespCooldown: 0,
-
+    index: 0,
+    stageTime: 0,
+    holding: false,
+    holdTime: 0,
+    activeKey: null,
+    activeScene: null,
+    cell: null,
+    view: null,
     playButton: null,
 
     /* ------------------------- lifecycle ------------------------- */
     init(env) {
       this.width = env.width;
       this.height = env.height;
-
-      this.entries = [
-        { section: "5.2", name: "Discovery v5", scene: P2P.scenes.discovery },
-        { section: "5.3", name: "QUIC", scene: P2P.scenes.quic },
-        { section: "5.4", name: "Gossipsub", scene: P2P.scenes.gossipsub },
-        { section: "5.5", name: "Request-Response", scene: P2P.scenes.reqresp },
-      ];
-
       this.computeLayout();
-
-      for (const entry of this.entries) {
-        // Drive everything from the dashboard's single clock.
-        if ("speed" in entry.scene) entry.scene.speed = 1;
-        entry.scene.init({ width: entry.view.w, height: entry.view.h });
-      }
-
-      // Kick the motions that need an explicit start / autoplay.
-      P2P.scenes.discovery.autoPlay = true;
-      P2P.scenes.quic.view = "hol";
-      P2P.scenes.reqresp.autoPlay = true;
-      this.publishGossip();
-
-      this.discoveryCooldown = 0;
-      this.gossipTimer = 0;
-      this.reqrespCooldown = 0;
+      this.enterStage(0);
     },
 
     resize(width, height) {
       this.width = width;
       this.height = height;
       this.computeLayout();
-      for (const entry of this.entries) {
-        entry.scene.width = entry.view.w;
-        entry.scene.height = entry.view.h;
-        entry.scene.resize(entry.view.w, entry.view.h);
+      if (this.activeScene) {
+        this.applyActiveDims();
+        this.activeScene.resize(this.view.w, this.view.h);
       }
     },
 
     /* ------------------------- layout ------------------------- */
     computeLayout() {
-      const colWidth = (this.width - 2 * MARGIN - GAP) / 2;
-      const rowHeight = (this.height - 2 * MARGIN - GAP) / 2;
-      const cols = [MARGIN, MARGIN + colWidth + GAP];
-      const rows = [MARGIN, MARGIN + rowHeight + GAP];
-      // Grid order: TL, TR, BL, BR (matches the entries array).
-      const positions = [
-        [cols[0], rows[0]],
-        [cols[1], rows[0]],
-        [cols[0], rows[1]],
-        [cols[1], rows[1]],
-      ];
-      this.entries.forEach((entry, index) => {
-        const [x, y] = positions[index];
-        entry.cell = { x, y, w: colWidth, h: rowHeight };
-        entry.view = {
-          x,
-          y: y + HEADER,
-          w: colWidth,
-          h: rowHeight - HEADER,
-        };
-      });
+      const barBottom = BAR_TOP + SEG_HEIGHT + NARRATION_HEIGHT;
+      const x = MARGIN;
+      const y = barBottom + 6;
+      this.cell = { x, y, w: this.width - 2 * MARGIN, h: this.height - y - MARGIN };
+      this.view = { x, y: y + HEADER, w: this.cell.w, h: this.cell.h - HEADER };
     },
 
-    /** Sub-scenes read this.width/height for layout — keep them cell-sized. */
-    applyDims() {
-      for (const entry of this.entries) {
-        entry.scene.width = entry.view.w;
-        entry.scene.height = entry.view.h;
-      }
+    applyActiveDims() {
+      if (!this.activeScene) return;
+      this.activeScene.width = this.view.w;
+      this.activeScene.height = this.view.h;
     },
 
-    /* ------------------------- loop control ------------------------- */
-    publishGossip() {
-      const gossip = P2P.scenes.gossipsub;
-      const alive = gossip.nodes.filter((node) => node.alive);
-      if (alive.length) gossip.publishFrom(util.pickRandom(gossip.rng, alive).index);
+    /* ------------------------- stage control ------------------------- */
+    enterStage(index) {
+      const previousKey = this.activeKey;
+      this.index = index;
+      this.stageTime = 0;
+      this.holding = false;
+      this.holdTime = 0;
+
+      const stage = STAGES[index];
+      const sceneObject = P2P.scenes[stage.sceneKey];
+      this.activeScene = sceneObject;
+      this.activeKey = stage.sceneKey;
+      this.applyActiveDims();
+
+      // Re-initialize only when the underlying scene changes, so consecutive
+      // gossipsub stages (購読 → 生成) keep the same network and mesh.
+      if (stage.sceneKey !== previousKey) {
+        if ("speed" in sceneObject) sceneObject.speed = 1;
+        sceneObject.init({ width: this.view.w, height: this.view.h });
+      }
+      stage.onEnter();
     },
 
-    driveLoops(dt) {
-      const discovery = P2P.scenes.discovery;
-      if (discovery.lookup && discovery.lookup.finished) {
-        this.discoveryCooldown += dt;
-        if (this.discoveryCooldown >= DISCOVERY_RESTART_DELAY) {
-          discovery.startLookup();
-          this.discoveryCooldown = 0;
-        }
-      } else {
-        this.discoveryCooldown = 0;
+    advance() {
+      if (this.index >= STAGES.length - 1) {
+        this.holding = true;
+        this.holdTime = 0;
+        return;
       }
-
-      const quic = P2P.scenes.quic;
-      if (quic.clock >= QUIC_END[quic.view]) {
-        quic.view = quic.view === "hol" ? "rtt" : "hol";
-        quic.replay();
-      }
-
-      this.gossipTimer += dt;
-      if (this.gossipTimer >= GOSSIP_PUBLISH_INTERVAL) {
-        this.gossipTimer = 0;
-        this.publishGossip();
-      }
-
-      const reqresp = P2P.scenes.reqresp;
-      if (reqresp.clock >= reqresp.endTime) {
-        this.reqrespCooldown += dt;
-        if (this.reqrespCooldown >= REQRESP_RESTART_DELAY) {
-          reqresp.build();
-          this.reqrespCooldown = 0;
-        }
-      } else {
-        this.reqrespCooldown = 0;
-      }
+      this.enterStage(this.index + 1);
     },
 
     /* ------------------------- update ------------------------- */
     update(realDt) {
-      this.applyDims();
+      this.applyActiveDims();
       if (this.paused) return;
       const dt = realDt * this.speed;
-      for (const entry of this.entries) entry.scene.update(dt);
-      this.driveLoops(dt);
+
+      if (this.holding) {
+        this.activeScene.update(dt); // keep the final motion alive during the hold
+        this.holdTime += dt;
+        if (this.holdTime >= END_HOLD) this.enterStage(0);
+        return;
+      }
+
+      this.activeScene.update(dt);
+      this.stageTime += dt;
+      if (STAGES[this.index].isDone(this)) this.advance();
     },
 
     /* ------------------------- rendering ------------------------- */
     render(ctx) {
       draw.clear(ctx, this.width, this.height);
-      this.applyDims();
-      for (const entry of this.entries) {
-        const view = entry.view;
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(view.x, view.y, view.w, view.h);
-        ctx.clip();
-        ctx.translate(view.x, view.y);
-        entry.scene.render(ctx);
-        ctx.restore();
-        this.renderChrome(ctx, entry);
-      }
+      this.renderPipeline(ctx);
+      this.renderStagePanel(ctx);
     },
 
-    renderChrome(ctx, entry) {
-      const cell = entry.cell;
-      // Cell border.
+    renderPipeline(ctx) {
+      const segmentWidth = (this.width - 2 * MARGIN) / STAGES.length;
+      STAGES.forEach((stage, index) => {
+        const x = MARGIN + index * segmentWidth;
+        const done = this.holding || index < this.index;
+        const active = !this.holding && index === this.index;
+        const color = active ? colors.accent : done ? colors.nodeHasMessage : colors.textDim;
+
+        ctx.save();
+        draw.roundedRect(ctx, x + 4, BAR_TOP, segmentWidth - 8, SEG_HEIGHT, 8);
+        ctx.fillStyle = active ? "#16263d" : "#121a27";
+        ctx.fill();
+        ctx.lineWidth = active ? 2 : 1;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+        ctx.restore();
+
+        const mark = done ? "✓ " : stage.no + " ";
+        draw.label(ctx, mark + stage.label, x + segmentWidth / 2, BAR_TOP + 13, color, "13px ui-monospace, monospace");
+        draw.label(ctx, "§" + stage.section, x + segmentWidth / 2, BAR_TOP + 27, colors.textDim, "10px ui-monospace, monospace");
+        if (index < STAGES.length - 1) {
+          draw.label(ctx, "→", x + segmentWidth - 2, BAR_TOP + 18, colors.textDim, "13px ui-monospace, monospace");
+        }
+      });
+
+      const narration = this.holding
+        ? "シナリオ完了 — 自ノードは稼働状態に。まもなく最初から再生。"
+        : STAGES[this.index].narration;
+      draw.label(ctx, narration, this.width / 2, BAR_TOP + SEG_HEIGHT + 14, colors.text, "12px ui-monospace, monospace");
+    },
+
+    renderStagePanel(ctx) {
+      this.applyActiveDims();
+      const view = this.view;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(view.x, view.y, view.w, view.h);
+      ctx.clip();
+      ctx.translate(view.x, view.y);
+      this.activeScene.render(ctx);
+      ctx.restore();
+
+      const cell = this.cell;
+      const stage = STAGES[this.index];
       ctx.save();
       draw.roundedRect(ctx, cell.x, cell.y, cell.w, cell.h, 10);
       ctx.strokeStyle = colors.grid;
@@ -215,41 +287,33 @@
       ctx.stroke();
       ctx.restore();
 
-      // Header strip.
       ctx.save();
       draw.roundedRect(ctx, cell.x, cell.y, cell.w, HEADER, 8);
       ctx.fillStyle = colors.panel;
       ctx.fill();
       ctx.restore();
-      draw.label(ctx, "§" + entry.section, cell.x + 12, cell.y + HEADER / 2, colors.accent, "bold 12px ui-monospace, monospace", "left");
-      draw.label(ctx, entry.name, cell.x + 52, cell.y + HEADER / 2, colors.text, "12px ui-monospace, monospace", "left");
+      draw.label(ctx, "§" + stage.section, cell.x + 12, cell.y + HEADER / 2, colors.accent, "bold 12px ui-monospace, monospace", "left");
+      draw.label(ctx, `${stage.no} ${stage.label}`, cell.x + 56, cell.y + HEADER / 2, colors.text, "12px ui-monospace, monospace", "left");
     },
 
     /* ------------------------- interaction ------------------------- */
     onMouse(type, x, y) {
-      for (const entry of this.entries) {
-        const view = entry.view;
-        if (x < view.x || x > view.x + view.w || y < view.y || y > view.y + view.h) continue;
-        if (entry.scene.onMouse) entry.scene.onMouse(type, x - view.x, y - view.y);
-        return;
-      }
+      const view = this.view;
+      if (x < view.x || x > view.x + view.w || y < view.y || y > view.y + view.h) return;
+      if (this.activeScene.onMouse) this.activeScene.onMouse(type, x - view.x, y - view.y);
     },
 
     /* ------------------------- stats ------------------------- */
-    statOf(sceneObject, label) {
-      const row = sceneObject.getStats().find((entry) => entry.label === label);
-      return row ? row.value : "—";
-    },
-
     getStats() {
-      return [
-        { label: "§5.2 探索ラウンド", value: this.statOf(P2P.scenes.discovery, "ラウンド (ホップ)") },
-        { label: "§5.3 QUIC 配信", value: this.statOf(P2P.scenes.quic, "QUIC アプリ配信") },
-        { label: "§5.4 到達ノード", value: this.statOf(P2P.scenes.gossipsub, "到達ノード") },
-        { label: "§5.5 受信チャンク", value: this.statOf(P2P.scenes.reqresp, "受信チャンク") },
-        { label: "再生", value: this.paused ? "一時停止" : "再生中" },
-        { label: "速度", value: this.speed + "x" },
+      const stage = STAGES[this.index];
+      const status = this.paused ? "一時停止" : this.holding ? "完了 → ループ" : "再生中";
+      const rows = [
+        { label: "ステージ", value: `${this.index + 1}/${STAGES.length} ${stage.label}` },
+        { label: "対象セクション", value: "§" + stage.section },
+        { label: "状態", value: status },
       ];
+      for (const row of this.activeScene.getStats().slice(0, 3)) rows.push(row);
+      return rows;
     },
 
     /* ------------------------- controls ------------------------- */
@@ -262,29 +326,13 @@
         this.playButton.textContent = this.paused ? "▶ 再生" : "⏸ 一時停止";
       }, "primary");
       playback.appendChild(this.playButton);
+      playback.appendChild(ui.button("次のステージ ▶", () => {
+        if (this.holding) this.enterStage(0);
+        else this.advance();
+      }));
+      playback.appendChild(ui.button("最初から ↻", () => this.enterStage(0)));
       playback.appendChild(ui.slider("再生速度 x", 0.25, 3, 0.25, this.speed, (value) => (this.speed = value)));
-      playback.appendChild(ui.button("全モーションをリスタート ↻", () => this.restartAll()));
       container.appendChild(playback);
-
-      const actions = ui.group("個別操作");
-      actions.appendChild(ui.button("§5.2 新しい探索", () => P2P.scenes.discovery.startLookup()));
-      actions.appendChild(ui.button("§5.4 ブロックを発行", () => this.publishGossip()));
-      actions.appendChild(ui.button("§5.5 シーケンス再生", () => P2P.scenes.reqresp.build()));
-      container.appendChild(actions);
-    },
-
-    restartAll() {
-      for (const entry of this.entries) {
-        if ("speed" in entry.scene) entry.scene.speed = 1;
-        entry.scene.init({ width: entry.view.w, height: entry.view.h });
-      }
-      P2P.scenes.discovery.autoPlay = true;
-      P2P.scenes.quic.view = "hol";
-      P2P.scenes.reqresp.autoPlay = true;
-      this.publishGossip();
-      this.discoveryCooldown = 0;
-      this.gossipTimer = 0;
-      this.reqrespCooldown = 0;
     },
   };
 
