@@ -48,6 +48,7 @@
       </ol>
       <p><b>2つの軸:</b> I0–I3 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
       <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
+      <p><b>深いリオルグ (秘匿枝の後出し):</b> 結託した多数派(群0 ≈60%)が slot3 で<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1 ≈40%)に公開チェーンを伸ばさせたまま、裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。slot7 で秘匿枝を<b>後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
       <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
       <p><b>色凡例:</b><br>
       <span style="color:#36d399">●</span> 提案ブロック伝播 / accepted / finalized &nbsp;
@@ -56,7 +57,8 @@
       <span style="color:#f59e0b">●</span> pending 投票 (I1) &nbsp;
       <span style="color:#2f6df6">●</span> 枝A (群0) 票 &nbsp;
       <span style="color:#f6a52f">●</span> 枝B (群1) 票 &nbsp;
-      <span style="color:#f87171">●</span> safe target / 2/3 閾値</p>`,
+      <span style="color:#f87171">●</span> safe target / 2/3 閾値 &nbsp;
+      <span style="color:#a78bfa">▱</span> 秘匿枝 (破線=withheld・後出しで reorg)</p>`,
 
     /* ------------------------- state ------------------------- */
     width: 0,
@@ -195,6 +197,7 @@
         const proposer = this.proposerForGroup(group);
         block.proposerIndex = proposer.index;
         proposer.hasBlock = true;
+        if (block.hidden) continue; // withheld branch is not broadcast — no propagation particles
         for (const validator of this.validators) {
           if (validator.index === proposer.index || !validator.online) continue;
           const duration = 0.5 + util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / 600;
@@ -605,7 +608,7 @@
       const phase = ["提案", "投票 (pending)", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
       const memo = new Map();
       const branchWeights = this.fork.tips().map((t) => this.fork.subtreeWeight(t, memo)).sort((a, b) => b - a);
-      const state = this.fork.partitioned ? "分断中" : this.fork.competing ? "フォーク中" : "単一";
+      const state = this.fork.partitioned ? "分断中" : this.fork.attacking ? "秘匿構築中" : this.fork.competing ? "フォーク中" : "単一";
       return [
         { label: "スロット / I", value: `${this.currentSlot} / I${this.interval} ${phase}` },
         { label: "シナリオ / 状態", value: `${P2P.forkScenarios[this.scenario].label} (${state})` },
@@ -613,7 +616,7 @@
         { label: "正規ヘッド (GHOST)", value: this.fork.headBlock.slot === 0 ? "genesis" : `slot ${this.fork.headBlock.slot}` },
         { label: "枝の重み (上位)", value: branchWeights.slice(0, 2).join(" / ") || "0" },
         { label: "先頭枝の得票", value: `${this.votesAccrued} / ${this.validatorCount}` },
-        { label: "孤立 / reorg", value: `${this.fork.orphanedCount()} / ${this.fork.reorgCount}` },
+        { label: "孤立 / reorg (最大深度)", value: `${this.fork.orphanedCount()} / ${this.fork.reorgCount} (深度${this.fork.reorgDepth})` },
         { label: "pending 集約 (Υ待ち)", value: (this.pendingAggregates || []).map((a) => `s${a.target.slot}(${a.votes})`).join(",") || "—" },
         { label: "latest justified (Υ)", value: `slot ${this.fork.latestJustified.slot}` },
         { label: "latest finalized", value: `slot ${this.fork.latestFinalized.slot}` },
