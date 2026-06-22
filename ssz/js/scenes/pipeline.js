@@ -40,6 +40,11 @@
         <li><b>④ 証明・検証 (§2.5):</b> <code>gindex = 2<sup>depth</sup> + position</code>。
         対象葉の<b>兄弟(witness)</b>を与えれば、検証者がルートを再計算して照合できる。</li>
       </ol>
+      <p><b>木の色凡例:</b><br>
+      <span style="color:#36d399">●</span> 証明対象 leaf &nbsp;
+      <span style="color:#8da2bd">●</span> witness (兄弟・提供) &nbsp;
+      <span style="color:#a78bfa">●</span> 再計算 (computed) &nbsp;
+      <span style="color:#fbbf24">●</span> trusted root</p>
       <p><b>操作:</b> フィールド(構造ボックス / バイト / 葉)をクリックして証明対象を選択、「検証 ▶」で再計算アニメ。
       「シグネチャ数」で可変部を伸縮。</p>`,
 
@@ -135,7 +140,6 @@
       this.renderSerialize(ctx);
       this.renderTree(ctx);
       this.renderProofPanel(ctx);
-      this.renderLegend(ctx);
     },
 
     renderStruct(ctx) {
@@ -315,23 +319,6 @@
         g = parent;
       }
       return steps;
-    },
-
-    renderLegend(ctx) {
-      const x = 30;
-      const y = this.height - 74;
-      const items = [
-        ["証明対象 leaf", colors.nodeHasMessage],
-        ["witness", colors.textDim],
-        ["再計算", colors.ihave],
-        ["trusted root", colors.nodeSource],
-      ];
-      let lx = x;
-      for (const [text, color] of items) {
-        draw.disc(ctx, lx + 4, y, 5, color, null);
-        draw.label(ctx, text, lx + 14, y, colors.textDim, "10px ui-monospace, monospace", "left");
-        lx += 14 + text.length * 8 + 24;
-      }
     },
 
     /* ----------------------- interaction ----------------------- */
