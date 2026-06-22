@@ -88,7 +88,8 @@
     /* ----------------------- geometry ----------------------- */
     serializeTop() { return 116; },
     treeBox() {
-      return { left: 30, top: 224, right: this.width * 0.63, bottom: this.height - 96 };
+      // top leaves sit well below the ③ label so their field-name captions clear it.
+      return { left: 30, top: 248, right: this.width * 0.63, bottom: this.height - 96 };
     },
     gindexPos(gindex) {
       const box = this.treeBox();
@@ -266,7 +267,7 @@
 
     renderProofPanel(ctx) {
       const x = this.width * 0.66;
-      const y = 116;
+      const y = 190; // below the serialize strip (② ends ~174) to avoid overlap
       const width = this.width - x - 16;
       if (width < 180) return;
       const field = this.selectedField();
