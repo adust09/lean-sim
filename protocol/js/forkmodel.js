@@ -18,6 +18,8 @@
     partition: { label: "ネットワーク分断 (60/40)" },
     equivocation: { label: "二重提案 (equivocation)" },
     deepreorg: { label: "深いリオルグ (秘匿枝の後出し)" },
+    balancing: { label: "バランシング攻撃" },
+    leak: { label: "不活性リーク" },
   };
 
   P2P.forkScenarios = SCENARIOS;
@@ -27,6 +29,10 @@
   // since the fork point at once (a multi-block reorg bounded by finalization).
   const DEEPREORG_FORK_SLOT = 3;
   const DEEPREORG_REVEAL_SLOT = 7;
+  // balancing attack: two tips fork at slot 3 and the adversary backs whichever
+  // is behind, so the GHOST head flips every slot and neither reaches 2/3.
+  const BALANCING_FORK_SLOT = 3;
+  const BALANCING_LAGGING_SHARE = 3; // out of 5 → ~60% of voters back the lagging tip
 
   /** Create a fork model seeded with a genesis block (justified + finalized). */
   P2P.createForkModel = function createForkModel(validatorCount) {
@@ -47,13 +53,18 @@
       reorgDepth: 0,
       partitioned: false,
       attacking: false,
+      balancing: false,
+      balanceRoots: null, // the two fork children, for measuring each branch's weight
+      activeCount: validatorCount, // shrinks under the inactivity leak as stake is bled
       publicTip: null,
       hiddenTip: null,
       groupTip: {},
       competing: null,
 
+      // 2/3 supermajority of the *active* stake; activeCount === validatorCount
+      // outside the inactivity-leak scenario, so this is unchanged for the rest.
       threshold() {
-        return Math.ceil((2 * this.validatorCount) / 3);
+        return Math.ceil((2 * this.activeCount) / 3);
       },
 
       /** Append a child block; a second child opens a new lane (a visible fork). */
@@ -149,6 +160,15 @@
           this.groupTip[1] = b;
           return [{ block: a, group: 0 }, { block: b, group: 1 }];
         }
+        if (scenario === "balancing" && this.balancing) {
+          const firstFork = this.groupTip[0] === this.groupTip[1];
+          const a = this.createBlock(this.groupTip[0], 0, slot);
+          const b = this.createBlock(this.groupTip[1], 1, slot);
+          this.groupTip[0] = a;
+          this.groupTip[1] = b;
+          if (firstFork) this.balanceRoots = [a, b];
+          return [{ block: a, group: 0 }, { block: b, group: 1 }];
+        }
         if (scenario === "deepreorg" && this.attacking) {
           const pub = this.createBlock(this.publicTip, 1, slot); // honest minority, public
           const hid = this.createBlock(this.hiddenTip, 0, slot); // attacker majority, withheld
@@ -168,9 +188,18 @@
         return [{ block: this.createBlock(head, 0, slot), group: 0 }];
       },
 
-      /** Which block a validator of `group` votes for this slot. */
-      voteTargetFor(group, scenario) {
+      /** Which block a validator of `group` (validator `index`) votes for this slot. */
+      voteTargetFor(group, scenario, index = 0) {
         if (scenario === "partition" && this.partitioned) return this.groupTip[group];
+        if (scenario === "balancing" && this.balancing && this.balanceRoots) {
+          // Adversary backs whichever branch is currently lighter (by LMD weight),
+          // keeping the two balanced just under 2/3 so the GHOST head flips every
+          // slot and finality can never reach a supermajority.
+          const memo = new Map();
+          const lagging = this.subtreeWeight(this.balanceRoots[0], memo) <= this.subtreeWeight(this.balanceRoots[1], memo) ? 0 : 1;
+          const backsLagging = index % 5 < BALANCING_LAGGING_SHARE;
+          return this.groupTip[backsLagging ? lagging : 1 - lagging];
+        }
         if (this.competing) return group === 0 ? this.competing[0] : this.competing[1];
         return this.headBlock;
       },
@@ -198,6 +227,11 @@
             this.recomputeHead();
             this.detectReorg(previousHead); // the withheld branch now wins GHOST → deep reorg
           }
+          return;
+        }
+        if (scenario === "balancing" && slot === BALANCING_FORK_SLOT && !this.balancing) {
+          this.balancing = true;
+          this.groupTip = { 0: this.headBlock, 1: this.headBlock };
         }
       },
 
