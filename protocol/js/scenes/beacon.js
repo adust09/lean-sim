@@ -42,7 +42,10 @@
         各ブロックは <code>parent_root</code> で連結し、<code>hash_tree_root</code>(§2) を持つ。</li>
         <li><b>投票 (I1):</b> 検証者が attestation を生成。
         <code>source</code>(直近justified) → <code>target</code>(今回のブロック) → <code>head</code> (§6.2)。</li>
-        <li><b>集約 (I2):</b> 同一票を1つに集約 (§6.4)。票が下の重みバーに積み上がる。</li>
+        <li><b>集約 (I2):</b> aggregator が同一 AttestationData の票を集約 (§6.4)。
+        多数の XMSS 署名(耐量子)を1本の集約署名 <code>Sagg</code> に圧縮し、誰が投票したかは
+        <b>参加ビットフィールド</b>で記録する。右の「集約 Aggregate」パネルが Fig 6.4 の集約オブジェクト
+        (source/target/head + bitfield + N→1) をライブ表示。</li>
         <li><b>受理 (I3):</b> フォーク選択ヘッドを更新。スロット終了時に判定。</li>
       </ol>
       <p><b>justification / finalization (§4,§6):</b> 1スロットの票が
@@ -395,6 +398,7 @@
       draw.clear(ctx, this.width, this.height);
       this.renderClock(ctx);
       this.renderNetwork(ctx);
+      this.renderAggregatePanel(ctx);
       this.renderChain(ctx);
       this.renderLegend(ctx);
     },
@@ -501,6 +505,65 @@
       if (aggregatorActive) {
         const agg = this.validators[this.aggregatorIndex];
         if (agg) draw.label(ctx, `aggregator ▸ ${this.collectedSigs}署名 → 1`, this.vx(agg), this.vy(agg) - 18, colors.graft, "10px ui-monospace, monospace");
+      }
+    },
+
+    /**
+     * The aggregate object being built this slot (spec §6.4 / Fig 6.4):
+     * shared AttestationData (source/target/head) + participation bitfield +
+     * the "N XMSS signatures → 1 aggregate" compression.
+     */
+    renderAggregatePanel(ctx) {
+      const x = this.netRight() + 20;
+      const y = this.netTop() + 132;
+      const width = this.width - x - 28;
+      const height = 152;
+      if (width < 190 || y + height > this.height - 170) return;
+
+      ctx.save();
+      draw.roundedRect(ctx, x, y, width, height, 8);
+      ctx.fillStyle = colors.panel;
+      ctx.fill();
+      ctx.strokeStyle = this.attestedThisSlot ? colors.graft + "99" : colors.grid;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+      draw.label(ctx, "集約 Aggregate (§6.4 / Fig 6.4)", x + 12, y + 16, colors.accent, "bold 11px ui-monospace, monospace", "left");
+
+      const head = this.chain[this.chain.length - 1];
+      const triple = this.attestTriple || { sourceSlot: this.latestJustified, targetSlot: head ? head.slot : 0 };
+      draw.label(ctx, `AttestationData  source s${triple.sourceSlot} · target s${triple.targetSlot} · head ${head ? head.root : "—"}`,
+        x + 12, y + 36, colors.textDim, "10px ui-monospace, monospace", "left");
+      draw.label(ctx, "participation bitfield (1=投票済 / 0=未):", x + 12, y + 56, colors.textDim, "10px ui-monospace, monospace", "left");
+      this.renderBitfield(ctx, x + 12, y + 66, width - 24);
+
+      const pop = this.validators.filter((v) => v.voted).length;
+      draw.label(ctx, `${pop} XMSS署名 → 1 集約署名 (Sagg)`, x + 12, y + height - 28, colors.graft, "11px ui-monospace, monospace", "left");
+      draw.label(ctx, `popcount = ${pop} / ${this.validatorCount}`, x + 12, y + height - 13, colors.text, "10px ui-monospace, monospace", "left");
+    },
+
+    renderBitfield(ctx, x, y, width) {
+      const count = this.validatorCount;
+      const gap = 2;
+      const perRow = util.clamp(Math.floor(width / 13), 8, count);
+      const cell = Math.max(8, Math.min(16, Math.floor(width / perRow) - gap));
+      for (let i = 0; i < count; i++) {
+        const col = i % perRow;
+        const row = Math.floor(i / perRow);
+        const cx = x + col * (cell + gap);
+        const cy = y + row * (cell + gap);
+        const node = this.validators[i];
+        const bit = node && node.voted ? 1 : 0;
+        const online = node ? node.online : true;
+        ctx.save();
+        draw.roundedRect(ctx, cx, cy, cell, cell, 3);
+        ctx.fillStyle = bit ? colors.nodeHasMessage + "55" : online ? "#15202f" : "#2a1822";
+        ctx.fill();
+        ctx.strokeStyle = bit ? colors.nodeHasMessage : online ? colors.grid : "#4a3340";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+        if (cell >= 12) draw.label(ctx, String(bit), cx + cell / 2, cy + cell / 2, bit ? colors.nodeHasMessage : colors.textDim, "9px ui-monospace, monospace");
       }
     },
 
