@@ -1,0 +1,223 @@
+/*
+ * forkmodel.js — reusable fork-tree + LMD-GHOST model for the capstone scene.
+ *
+ * Extracted so the beacon scene can simulate fork scenarios (§6.3) without the
+ * scene file exceeding the 800-line limit. Holds the block TREE, GHOST head
+ * selection, justification/finalization on the tree, reorg detection, scenario
+ * transitions, and the bottom-of-screen tree rendering. The beacon scene drives
+ * it: it decides when blocks are proposed/voted, and reads head/canonical here.
+ */
+"use strict";
+
+(function registerForkModel() {
+  const { util, draw, colors } = P2P;
+
+  const SCENARIOS = {
+    normal: { label: "正常 (フォークなし)" },
+    tempfork: { label: "一時的フォーク" },
+    partition: { label: "ネットワーク分断 (60/40)" },
+    equivocation: { label: "二重提案 (equivocation)" },
+  };
+
+  P2P.forkScenarios = SCENARIOS;
+
+  /** Create a fork model seeded with a genesis block (justified + finalized). */
+  P2P.createForkModel = function createForkModel(validatorCount) {
+    const genesis = {
+      id: 0, slot: 0, parent: null, children: [], lane: 0, weight: validatorCount,
+      root: util.toHexTag(0xa11ce, 4), justified: true, finalized: true, proposerGroup: -1,
+    };
+    const model = {
+      validatorCount,
+      blocks: [genesis],
+      genesis,
+      nextLane: 0,
+      latestJustified: genesis,
+      latestFinalized: genesis,
+      headBlock: genesis,
+      canonical: new Set([genesis]),
+      reorgCount: 0,
+      partitioned: false,
+      groupTip: {},
+      competing: null,
+
+      threshold() {
+        return Math.ceil((2 * this.validatorCount) / 3);
+      },
+
+      /** Append a child block; a second child opens a new lane (a visible fork). */
+      createBlock(parent, proposerGroup, slot) {
+        const lane = parent.children.length === 0 ? parent.lane : this.nextLane + 1;
+        if (parent.children.length > 0) this.nextLane += 1;
+        const rootValue = (slot * 2654435761) ^ (parent.id * 40503) ^ (proposerGroup * 7);
+        const block = {
+          id: this.blocks.length, slot, parent, children: [], lane, weight: 0,
+          root: util.toHexTag(rootValue & 0xffff, 4), justified: false, finalized: false, proposerGroup,
+        };
+        parent.children.push(block);
+        this.blocks.push(block);
+        return block;
+      },
+
+      subtreeWeight(block, memo) {
+        if (memo.has(block)) return memo.get(block);
+        let total = block.weight;
+        for (const child of block.children) total += this.subtreeWeight(child, memo);
+        memo.set(block, total);
+        return total;
+      },
+
+      /** LMD-GHOST: from the finalized root, descend into the heaviest subtree. */
+      recomputeHead() {
+        const memo = new Map();
+        let node = this.latestFinalized;
+        while (node.children.length > 0) {
+          let best = null;
+          let bestWeight = -1;
+          for (const child of node.children) {
+            const weight = this.subtreeWeight(child, memo);
+            if (weight > bestWeight || (weight === bestWeight && best && child.slot < best.slot)) {
+              bestWeight = weight;
+              best = child;
+            }
+          }
+          node = best;
+        }
+        this.headBlock = node;
+        this.canonical = new Set();
+        for (let walk = node; walk; walk = walk.parent) this.canonical.add(walk);
+      },
+
+      ancestorOf(maybeAncestor, block) {
+        for (let walk = block; walk; walk = walk.parent) if (walk === maybeAncestor) return true;
+        return false;
+      },
+
+      /** Justify a target block (state axis); finalize the prior justified ancestor. */
+      justify(target) {
+        if (target.justified) return;
+        target.justified = true;
+        const previousJustified = this.latestJustified;
+        this.latestJustified = target;
+        if (previousJustified && previousJustified.justified && this.ancestorOf(previousJustified, target) && previousJustified.slot < target.slot) {
+          this.latestFinalized = previousJustified;
+          for (let walk = previousJustified; walk; walk = walk.parent) walk.finalized = true;
+        }
+      },
+
+      detectReorg(previousHead) {
+        if (previousHead === this.headBlock) return;
+        if (!this.canonical.has(previousHead) && !this.ancestorOf(previousHead, this.headBlock)) {
+          this.reorgCount += 1;
+        }
+      },
+
+      orphanedCount() {
+        return this.blocks.filter(
+          (b) => b !== this.genesis && !this.canonical.has(b) && b.slot <= this.headBlock.slot,
+        ).length;
+      },
+
+      tips() {
+        return this.blocks.filter((b) => b.children.length === 0);
+      },
+
+      /* ------------------------- scenario engine (§6.3) ------------------------- */
+      /** Create this slot's block(s). Returns [{block, group}]; sets competing for forks. */
+      proposeSlot(scenario, slot) {
+        this.competing = null;
+        if (scenario === "partition" && this.partitioned) {
+          const a = this.createBlock(this.groupTip[0], 0, slot);
+          const b = this.createBlock(this.groupTip[1], 1, slot);
+          this.groupTip[0] = a;
+          this.groupTip[1] = b;
+          return [{ block: a, group: 0 }, { block: b, group: 1 }];
+        }
+        const head = this.headBlock;
+        if ((scenario === "tempfork" || scenario === "equivocation") && slot === 3) {
+          const a = this.createBlock(head, 0, slot);
+          const b = this.createBlock(head, 1, slot);
+          this.competing = [a, b];
+          return [{ block: a, group: 0 }, { block: b, group: 1 }];
+        }
+        return [{ block: this.createBlock(head, 0, slot), group: 0 }];
+      },
+
+      /** Which block a validator of `group` votes for this slot. */
+      voteTargetFor(group, scenario) {
+        if (scenario === "partition" && this.partitioned) return this.groupTip[group];
+        if (this.competing) return group === 0 ? this.competing[0] : this.competing[1];
+        return this.headBlock;
+      },
+
+      /** Partition the validator set at slot 2; heal at slot 7 (GHOST then resolves). */
+      applyScenarioTransitions(scenario, slot) {
+        if (scenario !== "partition") return;
+        if (slot === 2 && !this.partitioned) {
+          this.partitioned = true;
+          this.groupTip = { 0: this.headBlock, 1: this.headBlock };
+        } else if (slot === 7 && this.partitioned) {
+          this.partitioned = false;
+        }
+      },
+
+      /* ------------------------- tree rendering ------------------------- */
+      visibleMinSlot() {
+        return Math.max(this.latestFinalized.slot, this.headBlock.slot - 8);
+      },
+
+      blockX(block, box) {
+        const minSlot = this.visibleMinSlot();
+        const span = Math.max(1, this.headBlock.slot - minSlot + 1);
+        const columnWidth = (box.width - 90) / span;
+        return box.x + (block.slot - minSlot) * columnWidth + 36;
+      },
+
+      blockY(block, box) {
+        const laneCount = Math.max(1, this.nextLane + 1);
+        return box.y + (laneCount === 1 ? box.height / 2 : (block.lane / Math.max(1, laneCount - 1)) * box.height);
+      },
+
+      /** Draw the fork tree inside the given box; highlights canonical chain + head. */
+      renderTree(ctx, box) {
+        const minSlot = this.visibleMinSlot();
+        const memo = new Map();
+        for (const block of this.blocks) {
+          if (block.slot < minSlot || !block.parent || block.parent.slot < minSlot) continue;
+          const onCanonical = this.canonical.has(block) && this.canonical.has(block.parent);
+          draw.line(ctx, this.blockX(block.parent, box) + 15, this.blockY(block.parent, box), this.blockX(block, box) - 15, this.blockY(block, box),
+            onCanonical ? colors.nodeHasMessage + "cc" : colors.peerEdge, onCanonical ? 2 : 1.2, !onCanonical);
+        }
+        for (const block of this.blocks) {
+          if (block.slot < minSlot) continue;
+          this.renderBlock(ctx, block, box, memo);
+        }
+      },
+
+      renderBlock(ctx, block, box, memo) {
+        const x = this.blockX(block, box);
+        const y = this.blockY(block, box);
+        const orphaned = !this.canonical.has(block) && block.slot <= this.headBlock.slot;
+        let stroke = colors.nodeStroke;
+        if (block.finalized) stroke = colors.nodeHasMessage;
+        else if (block.justified) stroke = colors.graft;
+        else if (block === this.headBlock) stroke = colors.nodeSource;
+        else if (orphaned) stroke = colors.prune;
+        ctx.save();
+        ctx.globalAlpha = orphaned ? 0.5 : 1;
+        draw.roundedRect(ctx, x - 29, y - 16, 58, 32, 6);
+        ctx.fillStyle = "#15202f";
+        ctx.fill();
+        ctx.lineWidth = block === this.headBlock ? 2.4 : 1.6;
+        ctx.strokeStyle = stroke;
+        ctx.stroke();
+        ctx.restore();
+        const label = block.slot === 0 ? "gen" : `s${block.slot}`;
+        draw.label(ctx, `${label} ${block.root}`, x, y - 5, orphaned ? colors.textDim : colors.text, "9px ui-monospace, monospace");
+        draw.label(ctx, `Σ${this.subtreeWeight(block, memo)}·v${block.weight}`, x, y + 7, orphaned ? colors.textDim : colors.accent, "9px ui-monospace, monospace");
+        if (block === this.headBlock) draw.label(ctx, "◀head", x + 33, y, colors.nodeSource, "9px ui-monospace, monospace", "left");
+      },
+    };
+    return model;
+  };
+})();
