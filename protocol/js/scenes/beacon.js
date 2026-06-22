@@ -208,7 +208,10 @@
       };
       this.chain.push(block);
       this.votesAccrued = 0;
-      for (const validator of this.validators) validator.hasBlock = false;
+      for (const validator of this.validators) {
+        validator.hasBlock = false;
+        validator.voted = false;
+      }
       const proposer = this.validators[proposerIndex];
       if (proposer) proposer.hasBlock = true;
       // Propagate from the proposer to every validator (P2P broadcast flourish).
@@ -225,15 +228,24 @@
 
     castAttestations() {
       this.attestedThisSlot = true;
+      // Pick a deterministic aggregator that collects the slot's attestations.
+      this.aggregatorIndex = (this.currentSlot * 13 + 7) % this.validatorCount;
+      // The attestation triple every voter signs this slot (§6.2):
+      //   source = latest justified checkpoint, target = head = current block.
+      const block = this.chain[this.chain.length - 1];
+      const source = this.chain.find((b) => b.slot === this.latestJustified) || this.chain[0];
+      this.attestTriple = { sourceSlot: source.slot, targetSlot: block.slot };
       const voters = this.validators.filter((v) => v.online && this.rng() < this.participation);
       this.expectedVotes = voters.length;
-      // Each voter sends an attestation dot toward the current block on the chain.
+      // Each voter sends an attestation dot: voter → aggregator → chain.
       for (const voter of voters) {
         this.attestationDots.push({
+          voterIndex: voter.index,
           fromX: this.vx(voter),
           fromY: this.vy(voter),
           t: 0,
           duration: 0.6 + this.rng() * 0.5,
+          counted: false,
         });
       }
     },
@@ -293,11 +305,22 @@
       this.particles = survivingParticles;
 
       const block = this.chain[this.chain.length - 1];
-      const targetX = this.netRight() + 40;
-      const targetY = this.height - 110;
+      const aggregator = this.validators[this.aggregatorIndex] || null;
+      this.aggX = aggregator ? this.vx(aggregator) : this.netRight();
+      this.aggY = aggregator ? this.vy(aggregator) : this.netBottom();
+      this.dotTarget = { x: this.netRight() + 40, y: this.height - 110 };
+
+      let aggregating = 0;
       const survivingDots = [];
       for (const dot of this.attestationDots) {
         dot.t += dt / dot.duration;
+        // First half (voter → aggregator) counts the vote at the aggregator.
+        if (dot.t >= 0.5 && !dot.counted) {
+          dot.counted = true;
+          const voter = this.validators[dot.voterIndex];
+          if (voter) voter.voted = true;
+        }
+        if (dot.t >= 0.5) aggregating++;
         if (dot.t >= 1) {
           this.votesAccrued = Math.min(this.expectedVotes || 0, this.votesAccrued + 1);
           if (block) block.weight = this.votesAccrued;
@@ -306,7 +329,18 @@
         }
       }
       this.attestationDots = survivingDots;
-      this.dotTarget = { x: targetX, y: targetY };
+      this.aggregatingCount = aggregating;
+    },
+
+    /** Two-segment path for an attestation dot: voter → aggregator → chain. */
+    dotPos(dot) {
+      if (dot.t < 0.5) {
+        const f = dot.t / 0.5;
+        return { x: util.lerp(dot.fromX, this.aggX, f), y: util.lerp(dot.fromY, this.aggY, f) };
+      }
+      const f = (dot.t - 0.5) / 0.5;
+      const target = this.dotTarget || { x: this.netRight(), y: this.height - 110 };
+      return { x: util.lerp(this.aggX, target.x, f), y: util.lerp(this.aggY, target.y, f) };
     },
 
     stepOneSlot() {
@@ -314,6 +348,10 @@
       // Run proposal + attestations immediately, accrue all votes, then finish.
       if (!this.proposedThisSlot) this.proposeBlock();
       if (!this.attestedThisSlot) this.castAttestations();
+      for (const dot of this.attestationDots) {
+        const voter = this.validators[dot.voterIndex];
+        if (voter) voter.voted = true;
+      }
       this.votesAccrued = this.expectedVotes || 0;
       this.attestationDots = [];
       this.advanceSlot();
@@ -347,6 +385,13 @@
         ctx.stroke();
         ctx.restore();
         draw.label(ctx, labels[i], x + segWidth / 2, top + 25, active ? colors.text : colors.textDim, "12px ui-monospace, monospace");
+        // Sub-interval progress fill on the active segment.
+        if (active && this.auto) {
+          const intervalLength = SLOT_DURATION / INTERVAL_COUNT;
+          const progress = util.clamp((this.slotTimer % intervalLength) / intervalLength, 0, 1);
+          ctx.fillStyle = colors.accent;
+          ctx.fillRect(x + 4, top + 35, (segWidth - 8) * progress, 2);
+        }
       }
       draw.label(ctx, INTERVAL_NARRATION[this.interval], this.width / 2, top + 54, colors.text, "12px ui-monospace, monospace");
     },
@@ -374,16 +419,16 @@
         draw.disc(ctx, x, y, 3.5, colors.data, null);
       }
 
-      // Attestation dots flowing toward the chain (votes being collected).
-      const target = this.dotTarget || { x: this.netRight(), y: this.height - 110 };
+      // Attestation dots flowing voter → aggregator → chain (votes collected).
       for (const dot of this.attestationDots) {
-        const x = util.lerp(dot.fromX, target.x, dot.t);
-        const y = util.lerp(dot.fromY, target.y, dot.t);
-        draw.disc(ctx, x, y, 2.5, colors.ihave, null);
+        const pos = this.dotPos(dot);
+        // Brighten as the vote crosses the aggregator into the aggregate.
+        draw.disc(ctx, pos.x, pos.y, dot.t >= 0.5 ? 3 : 2.5, dot.t >= 0.5 ? colors.graft : colors.ihave, null);
       }
 
-      // Validator nodes.
+      // Validator nodes, colored by their role/state this slot.
       const proposerIndex = this.currentSlot % this.validatorCount;
+      const aggregatorActive = this.attestedThisSlot && this.interval >= 2;
       for (const node of this.validators) {
         const x = this.vx(node);
         const y = this.vy(node);
@@ -391,14 +436,24 @@
           draw.disc(ctx, x, y, 6, colors.nodeDead, "#4a3340", 1);
           continue;
         }
-        let fill = node.hasBlock ? colors.nodeHasMessage : colors.node;
+        let fill = node.voted ? colors.nodeHasMessage : colors.node;
+        let stroke = colors.nodeStroke;
+        if (node.index === this.aggregatorIndex && aggregatorActive) {
+          draw.glow(ctx, x, y, 18, colors.graft);
+          stroke = colors.graft;
+        }
         if (node.index === proposerIndex && this.proposedThisSlot) {
           draw.glow(ctx, x, y, 18, colors.nodeSource);
           fill = colors.nodeSource;
+          stroke = colors.nodeSource;
         }
-        draw.disc(ctx, x, y, 7, fill, colors.nodeStroke, 1.2);
+        draw.disc(ctx, x, y, 7, fill, stroke, 1.4);
       }
       draw.label(ctx, "検証者メッシュ (§5)", this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
+      if (aggregatorActive) {
+        const agg = this.validators[this.aggregatorIndex];
+        if (agg) draw.label(ctx, `aggregator ▸ 集約 ${this.aggregatingCount || 0}`, this.vx(agg), this.vy(agg) - 16, colors.graft, "10px ui-monospace, monospace");
+      }
     },
 
     renderChain(ctx) {
@@ -410,8 +465,10 @@
       const totalWidth = visible.length * (boxWidth + gap);
       const startX = Math.max(30, this.width - totalWidth - 30);
       let previousCenter = null;
+      const centerBySlot = new Map();
       visible.forEach((block, index) => {
         const x = startX + index * (boxWidth + gap);
+        centerBySlot.set(block.slot, x + boxWidth / 2);
         let stroke = colors.nodeStroke;
         let badge = "";
         if (block.finalized) {
@@ -441,8 +498,32 @@
         previousCenter = x + boxWidth;
       });
 
+      // FFG attestation triple (source → target/head) arced over the chain.
+      this.renderVoteTriple(ctx, centerBySlot, y);
+
       // Vote-weight bar for the current slot vs the 2/3 threshold.
       this.renderWeightBar(ctx, startX, y + 78);
+    },
+
+    renderVoteTriple(ctx, centerBySlot, blockY) {
+      if (!this.attestTriple || !this.attestedThisSlot) return;
+      const sourceX = centerBySlot.get(this.attestTriple.sourceSlot);
+      const targetX = centerBySlot.get(this.attestTriple.targetSlot);
+      if (sourceX == null || targetX == null) return;
+      const top = blockY - 8;
+      const midX = (sourceX + targetX) / 2;
+      ctx.save();
+      ctx.strokeStyle = colors.graft;
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(sourceX, top);
+      ctx.quadraticCurveTo(midX, top - 34, targetX, top);
+      ctx.stroke();
+      ctx.restore();
+      draw.label(ctx, "FFG投票: source → target (§6.2)", midX, top - 42, colors.textDim, "10px ui-monospace, monospace");
+      draw.label(ctx, "source", sourceX, top - 12, colors.graft, "9px ui-monospace, monospace");
+      if (targetX !== sourceX) draw.label(ctx, "target/head", targetX, top - 12, colors.nodeSource, "9px ui-monospace, monospace");
     },
 
     renderWeightBar(ctx, x, y) {
@@ -469,16 +550,17 @@
     renderLegend(ctx) {
       const items = [
         ["提案ブロック伝播", colors.data],
-        ["attestation", colors.ihave],
-        ["justified", colors.graft],
-        ["finalized", colors.nodeHasMessage],
+        ["attestation (voter→agg)", colors.ihave],
+        ["aggregator / 集約済み票", colors.graft],
+        ["提案者 / target・head", colors.nodeSource],
+        ["投票済み検証者 / finalized", colors.nodeHasMessage],
         ["2/3 閾値", colors.nodeTarget],
       ];
       let y = this.netTop() + 4;
       const x = this.netRight() + 24;
       ctx.save();
       ctx.globalAlpha = 0.94;
-      draw.roundedRect(ctx, x - 10, y - 14, 200, items.length * 18 + 14, 8);
+      draw.roundedRect(ctx, x - 10, y - 14, 232, items.length * 18 + 14, 8);
       ctx.fillStyle = "#0e1420cc";
       ctx.fill();
       ctx.restore();
@@ -504,6 +586,7 @@
         { label: "参加率", value: `${Math.round(this.participation * 100)}%` },
         { label: "今スロット得票", value: `${this.votesAccrued} / ${this.validatorCount} (${percent}%)` },
         { label: "2/3 到達", value: reached ? "はい (justify)" : "いいえ" },
+        { label: "aggregator", value: this.attestedThisSlot ? `#${this.aggregatorIndex} (集約 ${this.aggregatingCount || 0})` : "—" },
         { label: "latest justified", value: `slot ${this.latestJustified}` },
         { label: "latest finalized", value: `slot ${this.latestFinalized}` },
         { label: "ブロック数", value: this.chain.length },
