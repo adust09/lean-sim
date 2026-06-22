@@ -45,7 +45,13 @@
         <li>「ノードを数回落とす」→ 隣接 mesh が D_low を下回り、heartbeat で
         <code>GRAFT</code> が補充する(統計の GRAFT)。</li>
         <li>lazy pull を OFF にして発行すると、mesh が切れた孤立ノードに届かない様子が見える。</li>
-      </ul>`,
+      </ul>
+      <p><b>色凡例:</b><br>
+      <span style="color:#36d399">●</span> mesh / eager push &nbsp;
+      <span style="color:#a78bfa">●</span> IHAVE (gossip 広告) &nbsp;
+      <span style="color:#f59e0b">●</span> IWANT (本体要求) &nbsp;
+      <span style="color:#22d3ee">●</span> GRAFT &nbsp;
+      <span style="color:#fb7185">●</span> PRUNE</p>`,
 
     /* ------------------------- state ------------------------- */
     nodes: [],
@@ -509,25 +515,6 @@
     },
 
     renderLegend(ctx) {
-      const items = [
-        ["mesh / eager push", colors.data],
-        ["IHAVE (gossip 広告)", colors.ihave],
-        ["IWANT (本体要求)", colors.iwant],
-        ["GRAFT", colors.graft],
-        ["PRUNE", colors.prune],
-      ];
-      const x = 16;
-      let y = this.height - items.length * 18 - 14;
-      ctx.save();
-      ctx.globalAlpha = 0.92;
-      draw.roundedRect(ctx, x - 8, y - 14, 188, items.length * 18 + 14, 8);
-      ctx.fillStyle = "#0e1420cc";
-      ctx.fill();
-      for (const [text, color] of items) {
-        draw.disc(ctx, x + 4, y, 4, color, null);
-        draw.label(ctx, text, x + 16, y, colors.textDim, "11px ui-monospace, monospace", "left");
-        y += 18;
-      }
       const beat = this.heartbeatPulse > 0.01 ? "● heartbeat" : "○ heartbeat";
       draw.label(
         ctx,
@@ -538,7 +525,6 @@
         "12px ui-monospace, monospace",
         "right",
       );
-      ctx.restore();
     },
 
     /* ------------------------- interaction ------------------------- */

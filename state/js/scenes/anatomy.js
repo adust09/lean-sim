@@ -245,7 +245,13 @@
       <p><b>state_root</b> は Phase 4 で検証されます：<code>HashTreeRoot(S_{n+1})</code> がヘッダの
       申告値と一致しなければブロックは却下されます。</p>
       <p><b>操作:</b> フィールドや区画にホバーまたはクリックすると役割の説明が右側に表示されます。
-      固定サイズ（□）と可変サイズ（◇）の違いにも注目してください。</p>`,
+      固定サイズ（□）と可変サイズ（◇）の違いにも注目してください。</p>
+      <p><b>凡例:</b><br>
+      <span style="color:#5a7299">□</span> 固定サイズフィールド &nbsp;
+      <span style="color:#a78bfa">◇</span> 可変サイズフィールド<br>
+      <span style="color:#fbbf24">■</span> Identity &nbsp;
+      <span style="color:#60a5fa">■</span> Chronology &nbsp;
+      <span style="color:#a78bfa">■</span> Active Voting</p>`,
 
     /* ---------------------------------------------------------------- */
     /* Runtime state                                                     */
@@ -646,19 +652,6 @@
       infoText.textContent = "フィールドにホバーで説明表示。クリックで固定表示。もう一度クリックで解除。";
       infoGroup.appendChild(infoText);
       container.appendChild(infoGroup);
-
-      const legendGroup = ui.group("凡例");
-      const legendText = document.createElement("div");
-      legendText.style.cssText = "color:#8da2bd;font-size:11px;line-height:1.8;padding:4px 0;";
-      legendText.innerHTML = `
-        <span style="color:#5a7299">□</span> 固定サイズフィールド<br>
-        <span style="color:#a78bfa">◇</span> 可変サイズフィールド<br>
-        <span style="color:#fbbf24">■</span> Identity ドメイン<br>
-        <span style="color:#60a5fa">■</span> Chronology ドメイン<br>
-        <span style="color:#a78bfa">■</span> Active Voting ドメイン
-      `;
-      legendGroup.appendChild(legendText);
-      container.appendChild(legendGroup);
 
       const clearButton = ui.button("選択をクリア", () => {
         sceneRef.selectedFieldKey = null;
