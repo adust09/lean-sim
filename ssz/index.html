@@ -43,12 +43,11 @@
     </main>
 
     <script src="../shared/core.js"></script>
-    <script src="js/scenes/serialize.js"></script>
-    <script src="js/scenes/merkleize.js"></script>
-    <script src="js/scenes/proof.js"></script>
+    <script src="js/sszmodel.js"></script>
+    <script src="js/scenes/pipeline.js"></script>
     <script>
-      // Tab order: Serialization (2.3), Merkleization (2.4), Merkle Proof (2.5).
-      window.P2P_SCENE_ORDER = ["serialize", "merkleize", "proof"];
+      // One unified pipeline: serialize (2.3) → merkleize (2.4) → proof (2.5).
+      window.P2P_SCENE_ORDER = ["pipeline"];
     </script>
     <script src="../shared/app.js"></script>
   </body>
