@@ -17,9 +17,16 @@
     tempfork: { label: "一時的フォーク" },
     partition: { label: "ネットワーク分断 (60/40)" },
     equivocation: { label: "二重提案 (equivocation)" },
+    deepreorg: { label: "深いリオルグ (秘匿枝の後出し)" },
   };
 
   P2P.forkScenarios = SCENARIOS;
+
+  // deepreorg timeline: the colluding majority forks a private branch at slot 3,
+  // builds it withheld, and reveals it at slot 7 — orphaning every honest block
+  // since the fork point at once (a multi-block reorg bounded by finalization).
+  const DEEPREORG_FORK_SLOT = 3;
+  const DEEPREORG_REVEAL_SLOT = 7;
 
   /** Create a fork model seeded with a genesis block (justified + finalized). */
   P2P.createForkModel = function createForkModel(validatorCount) {
@@ -37,7 +44,11 @@
       headBlock: genesis,
       canonical: new Set([genesis]),
       reorgCount: 0,
+      reorgDepth: 0,
       partitioned: false,
+      attacking: false,
+      publicTip: null,
+      hiddenTip: null,
       groupTip: {},
       competing: null,
 
@@ -60,6 +71,7 @@
       },
 
       subtreeWeight(block, memo) {
+        if (block.hidden) return 0; // a withheld branch is invisible to GHOST until revealed
         if (memo.has(block)) return memo.get(block);
         let total = block.weight;
         for (const child of block.children) total += this.subtreeWeight(child, memo);
@@ -109,12 +121,16 @@
         if (previousHead === this.headBlock) return;
         if (!this.canonical.has(previousHead) && !this.ancestorOf(previousHead, this.headBlock)) {
           this.reorgCount += 1;
+          // depth = blocks orphaned from the old head back to its common ancestor with the new head.
+          let depth = 0;
+          for (let walk = previousHead; walk && !this.ancestorOf(walk, this.headBlock); walk = walk.parent) depth += 1;
+          this.reorgDepth = Math.max(this.reorgDepth, depth);
         }
       },
 
       orphanedCount() {
         return this.blocks.filter(
-          (b) => b !== this.genesis && !this.canonical.has(b) && b.slot <= this.headBlock.slot,
+          (b) => b !== this.genesis && !b.hidden && !this.canonical.has(b) && b.slot <= this.headBlock.slot,
         ).length;
       },
 
@@ -132,6 +148,15 @@
           this.groupTip[0] = a;
           this.groupTip[1] = b;
           return [{ block: a, group: 0 }, { block: b, group: 1 }];
+        }
+        if (scenario === "deepreorg" && this.attacking) {
+          const pub = this.createBlock(this.publicTip, 1, slot); // honest minority, public
+          const hid = this.createBlock(this.hiddenTip, 0, slot); // attacker majority, withheld
+          hid.hidden = true;
+          this.publicTip = pub;
+          this.hiddenTip = hid;
+          this.competing = [hid, pub]; // group 0 → hidden, group 1 → public (see voteTargetFor)
+          return [{ block: pub, group: 1 }, { block: hid, group: 0 }];
         }
         const head = this.headBlock;
         if ((scenario === "tempfork" || scenario === "equivocation") && slot === 3) {
@@ -152,12 +177,27 @@
 
       /** Partition the validator set at slot 2; heal at slot 7 (GHOST then resolves). */
       applyScenarioTransitions(scenario, slot) {
-        if (scenario !== "partition") return;
-        if (slot === 2 && !this.partitioned) {
-          this.partitioned = true;
-          this.groupTip = { 0: this.headBlock, 1: this.headBlock };
-        } else if (slot === 7 && this.partitioned) {
-          this.partitioned = false;
+        if (scenario === "partition") {
+          if (slot === 2 && !this.partitioned) {
+            this.partitioned = true;
+            this.groupTip = { 0: this.headBlock, 1: this.headBlock };
+          } else if (slot === 7 && this.partitioned) {
+            this.partitioned = false;
+          }
+          return;
+        }
+        if (scenario === "deepreorg") {
+          if (slot === DEEPREORG_FORK_SLOT && !this.attacking) {
+            this.attacking = true;
+            this.publicTip = this.headBlock;
+            this.hiddenTip = this.headBlock;
+          } else if (slot === DEEPREORG_REVEAL_SLOT && this.attacking) {
+            this.attacking = false;
+            const previousHead = this.headBlock;
+            for (const block of this.blocks) if (block.hidden) block.hidden = false; // reveal
+            this.recomputeHead();
+            this.detectReorg(previousHead); // the withheld branch now wins GHOST → deep reorg
+          }
         }
       },
 
@@ -185,8 +225,9 @@
         for (const block of this.blocks) {
           if (block.slot < minSlot || !block.parent || block.parent.slot < minSlot) continue;
           const onCanonical = this.canonical.has(block) && this.canonical.has(block.parent);
+          const edgeColor = block.hidden ? colors.ihave + "88" : onCanonical ? colors.nodeHasMessage + "cc" : colors.peerEdge;
           draw.line(ctx, this.blockX(block.parent, box) + 15, this.blockY(block.parent, box), this.blockX(block, box) - 15, this.blockY(block, box),
-            onCanonical ? colors.nodeHasMessage + "cc" : colors.peerEdge, onCanonical ? 2 : 1.2, !onCanonical);
+            edgeColor, onCanonical ? 2 : 1.2, block.hidden || !onCanonical);
         }
         for (const block of this.blocks) {
           if (block.slot < minSlot) continue;
@@ -197,24 +238,29 @@
       renderBlock(ctx, block, box, memo) {
         const x = this.blockX(block, box);
         const y = this.blockY(block, box);
-        const orphaned = !this.canonical.has(block) && block.slot <= this.headBlock.slot;
+        const hidden = !!block.hidden;
+        const orphaned = !hidden && !this.canonical.has(block) && block.slot <= this.headBlock.slot;
         let stroke = colors.nodeStroke;
-        if (block.finalized) stroke = colors.nodeHasMessage;
+        if (hidden) stroke = colors.ihave;
+        else if (block.finalized) stroke = colors.nodeHasMessage;
         else if (block.justified) stroke = colors.graft;
         else if (block === this.headBlock) stroke = colors.nodeSource;
         else if (orphaned) stroke = colors.prune;
         ctx.save();
-        ctx.globalAlpha = orphaned ? 0.5 : 1;
+        ctx.globalAlpha = hidden ? 0.65 : orphaned ? 0.5 : 1;
         draw.roundedRect(ctx, x - 29, y - 16, 58, 32, 6);
-        ctx.fillStyle = "#15202f";
+        ctx.fillStyle = hidden ? "#1b1830" : "#15202f";
         ctx.fill();
         ctx.lineWidth = block === this.headBlock ? 2.4 : 1.6;
         ctx.strokeStyle = stroke;
+        if (hidden) ctx.setLineDash([4, 3]);
         ctx.stroke();
         ctx.restore();
+        const dim = hidden || orphaned;
         const label = block.slot === 0 ? "gen" : `s${block.slot}`;
-        draw.label(ctx, `${label} ${block.root}`, x, y - 5, orphaned ? colors.textDim : colors.text, "9px ui-monospace, monospace");
-        draw.label(ctx, `Σ${this.subtreeWeight(block, memo)}·v${block.weight}`, x, y + 7, orphaned ? colors.textDim : colors.accent, "9px ui-monospace, monospace");
+        draw.label(ctx, `${label} ${block.root}`, x, y - 5, dim ? colors.textDim : colors.text, "9px ui-monospace, monospace");
+        const weightTag = hidden ? `秘匿·v${block.weight}` : `Σ${this.subtreeWeight(block, memo)}·v${block.weight}`;
+        draw.label(ctx, weightTag, x, y + 7, hidden ? colors.ihave : orphaned ? colors.textDim : colors.accent, "9px ui-monospace, monospace");
         if (block === this.headBlock) draw.label(ctx, "◀head", x + 33, y, colors.nodeSource, "9px ui-monospace, monospace", "left");
       },
     };
