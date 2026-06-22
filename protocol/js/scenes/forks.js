@@ -32,6 +32,15 @@
     equivocation: { label: "二重提案 (equivocation)" },
   };
 
+  // The four per-slot intervals (§3) that drive the fork-choice cycle.
+  const INTERVAL_LABELS = ["I0 提案", "I1 投票", "I2 集約", "I3 フォーク選択"];
+  const INTERVAL_NARRATION = [
+    "Interval 0 — 提案者がブロックを生成し配信 (§3,§5)。フォーク時は枝が分岐する。",
+    "Interval 1 — 各検証者が attestation を投票。票が枝ごとに分かれる (§6.2)。",
+    "Interval 2 — 票を集約し、各枝・各ブロックの重みを更新 (§6.4)。",
+    "Interval 3 — GHOST フォーク選択でヘッドを再計算し reorg / justify を判定 (§6.3)。",
+  ];
+
   const scene = {
     id: "forks",
     title: "フォーク・シナリオ",
@@ -474,9 +483,36 @@
 
     renderClock(ctx) {
       const left = 28;
-      draw.label(ctx, `Slot ${this.currentSlot}  ·  ${SCENARIOS[this.scenario].label}`, left, 26, colors.nodeSource, "bold 14px ui-monospace, monospace", "left");
       const status = this.partitioned ? "ネットワーク分断中 — finality 停止" : this.competing ? "フォーク発生 — 票が分裂" : "単一チェーン";
-      draw.label(ctx, `I${this.interval} · ${status}`, left, 46, this.partitioned || this.competing ? colors.prune : colors.textDim, "12px ui-monospace, monospace", "left");
+      draw.label(ctx, `Slot ${this.currentSlot}  ·  ${SCENARIOS[this.scenario].label}`, left, 22, colors.nodeSource, "bold 14px ui-monospace, monospace", "left");
+      draw.label(ctx, status, this.width - 28, 22, this.partitioned || this.competing ? colors.prune : colors.textDim, "12px ui-monospace, monospace", "right");
+      this.renderIntervalBar(ctx, 34);
+      draw.label(ctx, INTERVAL_NARRATION[this.interval], this.width / 2, 92, colors.text, "12px ui-monospace, monospace");
+    },
+
+    renderIntervalBar(ctx, top) {
+      const left = 28;
+      const right = this.width - 28;
+      const segWidth = (right - left) / INTERVAL_COUNT;
+      const intervalLength = SLOT_DURATION / INTERVAL_COUNT;
+      for (let i = 0; i < INTERVAL_COUNT; i++) {
+        const x = left + i * segWidth;
+        const active = i === this.interval;
+        ctx.save();
+        draw.roundedRect(ctx, x + 3, top, segWidth - 6, 26, 6);
+        ctx.fillStyle = active ? "#16263d" : "#121a27";
+        ctx.fill();
+        ctx.lineWidth = active ? 2 : 1;
+        ctx.strokeStyle = active ? colors.accent : colors.grid;
+        ctx.stroke();
+        ctx.restore();
+        draw.label(ctx, INTERVAL_LABELS[i], x + segWidth / 2, top + 13, active ? colors.text : colors.textDim, "12px ui-monospace, monospace");
+        if (active && this.auto) {
+          const progress = util.clamp((this.slotTimer % intervalLength) / intervalLength, 0, 1);
+          ctx.fillStyle = colors.accent;
+          ctx.fillRect(x + 4, top + 23, (segWidth - 8) * progress, 2);
+        }
+      }
     },
 
     renderNetwork(ctx) {
