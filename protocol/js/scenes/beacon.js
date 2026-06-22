@@ -30,6 +30,9 @@
     "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。重み更新→ヘッド再計算 (§6.3)。",
   ];
 
+  // Υ's 4-phase transition pipeline, run when a block is processed at I0 (§4.3).
+  const UPSILON_PHASES = ["① 時刻同期", "② ヘッダ検証", "③ ペイロード実行", "④ state root"];
+
   const scene = {
     id: "beacon",
     title: "ビーコンチェーン稼働",
@@ -37,7 +40,7 @@
     descriptionHTML: `
       <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> プロトコルが「生きたチェーン」として動く様子を観察できる。毎スロット、4つのインターバル(§3)が次を駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り検証者メッシュへ伝播 (§5)。<code>parent_root</code> で連結し <code>hash_tree_root</code>(§2) を持つ。同時にブロック処理 Υ が走る(下記)。</li>
+        <li><b>提案 Block Proposal (I0):</b> 提案者がブロックを作り検証者メッシュへ伝播 (§5)。<code>parent_root</code> で連結し <code>hash_tree_root</code>(§2) を持つ。同時にブロック処理 Υ(§4.3 の4フェーズ: 時刻同期→ヘッダ検証→ペイロード実行→state root)が走り、前スロットの集約票を適用する(右の Υ パネル)。</li>
         <li><b>投票 Attestation Broadcast (I1):</b> 検証者が attestation を配信。<code>source</code>(直近justified)→<code>target</code>(今回のブロック)→<code>head</code> (§6.2)。<b>票はまだ pending</b>(保留・fork choice 未反映)。並行して aggregator が同一票を集約 (§6.4): 多数の XMSS 署名を1本 <code>Sagg</code> に圧縮し参加ビットフィールドに記録(右パネル / Fig 6.4)。</li>
         <li><b>セーフターゲット Safe Target Update (I2):</b> 票を数える前に<b>直近で 2/3 を集めたブロック(セーフターゲット)を確定</b>して視点を安定化し reorg を防ぐ。チェーン上で <code>safe ▸</code> 強調。</li>
         <li><b>受理 Attestation Acceptance (I3):</b> pending の票を受理して fork choice に投入(得票バーが埋まりヘッド再計算)。</li>
@@ -111,17 +114,7 @@
       this.acceptedThisSlot = false;
       this.buildValidators();
       // Genesis block (slot 0): justified + finalized by definition.
-      this.chain = [
-        {
-          slot: 0,
-          proposerIndex: -1,
-          root: util.toHexTag(0xa11ce, 4),
-          parentRoot: "0x0000",
-          justified: true,
-          finalized: true,
-          weight: this.validatorCount,
-        },
-      ];
+      this.chain = [{ slot: 0, proposerIndex: -1, root: util.toHexTag(0xa11ce, 4), parentRoot: "0x0000", justified: true, finalized: true, weight: this.validatorCount }];
     },
 
     buildValidators() {
@@ -148,14 +141,7 @@
       // Guarantee exactly validatorCount nodes (relax spacing if needed) so
       // proposer indexing and the 2/3 threshold always use the real count.
       while (nodes.length < count) {
-        nodes.push({
-          index: nodes.length,
-          nx: 0.1 + this.rng() * 0.42,
-          ny: 0.12 + this.rng() * 0.72,
-          online: true,
-          hasBlock: false,
-          voteState: "none",
-        });
+        nodes.push({ index: nodes.length, nx: 0.1 + this.rng() * 0.42, ny: 0.12 + this.rng() * 0.72, online: true, hasBlock: false, voteState: "none" });
       }
       this.validators = nodes;
       // Proximity mesh for the propagation flourish.
@@ -209,15 +195,7 @@
       const parent = this.chain[this.chain.length - 1];
       const proposerIndex = this.currentSlot % this.validatorCount;
       const rootValue = (this.currentSlot * 2654435761) ^ (parent.weight * 40503);
-      const block = {
-        slot: this.currentSlot,
-        proposerIndex,
-        root: util.toHexTag(rootValue & 0xffff, 4),
-        parentRoot: parent.root,
-        justified: false,
-        finalized: false,
-        weight: 0,
-      };
+      const block = { slot: this.currentSlot, proposerIndex, root: util.toHexTag(rootValue & 0xffff, 4), parentRoot: parent.root, justified: false, finalized: false, weight: 0 };
       this.chain.push(block);
       // I0 also processes the new block: Υ applies the aggregates it carries
       // (the previous slot's votes), committing justification to state.
@@ -232,12 +210,8 @@
       // Propagate from the proposer to every validator (P2P broadcast flourish).
       for (const validator of this.validators) {
         if (validator.index === proposerIndex || !validator.online) continue;
-        this.particles.push({
-          fromIndex: proposerIndex,
-          toIndex: validator.index,
-          t: 0,
-          duration: 0.5 + util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / 600,
-        });
+        const duration = 0.5 + util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / 600;
+        this.particles.push({ fromIndex: proposerIndex, toIndex: validator.index, t: 0, duration });
       }
     },
 
@@ -424,6 +398,7 @@
       this.renderClock(ctx);
       this.renderNetwork(ctx);
       this.renderAggregatePanel(ctx);
+      this.renderUpsilonPipeline(ctx);
       this.renderChain(ctx);
       this.renderLegend(ctx);
     },
@@ -534,11 +509,7 @@
       }
     },
 
-    /**
-     * The aggregate object being built this slot (spec §6.4 / Fig 6.4):
-     * shared AttestationData (source/target/head) + participation bitfield +
-     * the "N XMSS signatures → 1 aggregate" compression.
-     */
+    /** The aggregate object being built this slot (§6.4 / Fig 6.4): AttestationData + bitfield + N→1. */
     renderAggregatePanel(ctx) {
       const x = this.netRight() + 20;
       const y = this.netTop() + 144;
@@ -594,29 +565,57 @@
       }
     },
 
-    /** The Υ block-processing event (state axis), shown live during I0. */
-    renderUpsilonStatus(ctx, x, y) {
+    /** Υ state transition pipeline (§4.3): a 4-phase strip lighting up 1→4 as the I0 block is processed. */
+    renderUpsilonPipeline(ctx) {
+      const x = this.netRight() + 20;
+      const y = this.netTop() + 304;
+      const width = this.width - x - 28;
+      if (width < 300 || y + 64 > this.height - 150) return;
       const active = this.interval === 0 && this.proposedThisSlot;
+
+      ctx.save();
+      draw.roundedRect(ctx, x, y, width, 64, 8);
+      ctx.fillStyle = colors.panel;
+      ctx.fill();
+      ctx.strokeStyle = active ? colors.nodeActive + "99" : colors.grid;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+      draw.label(ctx, "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)", x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 11px ui-monospace, monospace", "left");
+
+      // Phases advance across the first 2s of I0 (all done outside the I0 window).
+      const phase = active ? util.clamp(Math.floor(this.slotTimer / 0.5), 0, 4) : -1;
+      const chipWidth = (width - 24 - 18) / 4;
+      for (let i = 0; i < UPSILON_PHASES.length; i++) {
+        const cx = x + 12 + i * (chipWidth + 6);
+        const cy = y + 24;
+        const done = i < phase;
+        const on = i === phase;
+        ctx.save();
+        draw.roundedRect(ctx, cx, cy, chipWidth, 20, 5);
+        ctx.fillStyle = on ? "#16263d" : "#121a27";
+        ctx.fill();
+        ctx.lineWidth = on ? 2 : 1;
+        ctx.strokeStyle = done ? colors.nodeHasMessage : on ? colors.nodeActive : colors.grid;
+        ctx.stroke();
+        ctx.restore();
+        draw.label(ctx, (done ? "✓ " : "") + UPSILON_PHASES[i], cx + chipWidth / 2, cy + 10, done ? colors.nodeHasMessage : on ? colors.text : colors.textDim, "9px ui-monospace, monospace");
+      }
+
       const block = this.chain[this.chain.length - 1];
       const incl = (block && block.included) || [];
-      const justified = this.upsilonApplied || [];
-      draw.label(ctx, "状態遷移 Υ (ブロック処理軸):", x, y, active ? colors.nodeActive : colors.textDim, "11px ui-monospace, monospace", "left");
-      let msg;
-      if (!active) {
-        msg = "次の提案(I0)でブロックを処理し justification を確定";
-      } else if (incl.length === 0) {
-        msg = `block s${block ? block.slot : "?"} を処理 ▸ 取り込む集約なし`;
-      } else {
-        const aggs = incl.map((a) => `s${a.targetSlot}`).join(",");
-        msg = `block s${block.slot} を処理 ▸ incl agg(${aggs})` + (justified.length ? ` → s${justified.join(",s")} justified 確定` : " → 2/3未達");
-      }
-      draw.label(ctx, msg, x + 196, y, active ? colors.text : colors.textDim, "11px ui-monospace, monospace", "left");
+      const just = this.upsilonApplied || [];
+      const detail = active
+        ? incl.length
+          ? `③ Consensus Execution: incl agg(${incl.map((a) => "s" + a.targetSlot).join(",")})` + (just.length ? ` → s${just.join(",s")} justified 確定` : " → 2/3未達で justify せず")
+          : "③ Consensus Execution: 取り込む集約なし"
+        : "次の提案(I0)でブロックを処理し4フェーズを実行する";
+      draw.label(ctx, detail, x + 12, y + 56, active ? colors.text : colors.textDim, "10px ui-monospace, monospace", "left");
     },
 
     renderChain(ctx) {
       const y = this.height - 150;
       draw.label(ctx, "ブロックチェーン (§4) — parent_root 連結 / hash_tree_root (§2)", 30, y - 14, colors.textDim, "12px ui-monospace, monospace", "left");
-      this.renderUpsilonStatus(ctx, 30, y - 32);
       const boxWidth = 96;
       const gap = 16;
       const visible = this.chain.slice(-8);
