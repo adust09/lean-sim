@@ -19,7 +19,7 @@
 (function registerBeacon() {
   const { util, draw, colors } = P2P;
 
-  const SLOT_DURATION = 4.0; // simulated seconds per slot (4 intervals of 1s)
+  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
   const INTERVAL_COUNT = 4;
 
   const INTERVAL_NARRATION = [

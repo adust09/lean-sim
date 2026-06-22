@@ -22,7 +22,7 @@
 (function registerForks() {
   const { util, draw, colors } = P2P;
 
-  const SLOT_DURATION = 3.4;
+  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
   const INTERVAL_COUNT = 4;
 
   const SCENARIOS = {
