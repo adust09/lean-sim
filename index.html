@@ -13,32 +13,17 @@
         <p>
           <code>lean_consensus</code> の各章で説明される仕組みを、ブラウザ上で動かして
           直感的に理解するためのインタラクティブ・シミュレータ集です。
-          ビルド不要・依存ライブラリなしのバニラ JavaScript + Canvas。
-          見たいトピックを選んでください。
         </p>
       </div>
 
       <div class="topic-grid">
-        <a class="topic-card available" href="p2p/index.html">
-          <div class="topic-section">§5 · The Peer-to-Peer Layer</div>
-          <div class="topic-name">P2P レイヤー</div>
-          <div class="topic-desc">
-            Discovery v5 (Kademlia/XOR探索)、QUIC (HOLブロッキング/RTT)、
-            Gossipsub (mesh伝播)、Request-Response、そして新規ノードの
-            参加〜稼働ライフサイクルを横断する総まとめ。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
-
         <a class="topic-card available" href="ssz/index.html">
           <div class="topic-section">§2 · Simple Serialize</div>
           <div class="topic-name">SSZ エンコーディング</div>
           <div class="topic-desc">
             シリアライズのオフセット、Merkleization とハッシュツリールート、
             generalized index による証明の可視化。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
+          </div>        </a>
 
         <a class="topic-card available" href="time/index.html">
           <div class="topic-section">§3 · The Time Model</div>
@@ -46,9 +31,7 @@
           <div class="topic-desc">
             スロットと4つのインターバル、リアルタイムのスロットクロック、
             提案タイミングと締切のタイミングゲームを可視化。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
+          </div>        </a>
 
         <a class="topic-card available" href="state/index.html">
           <div class="topic-section">§4 · State Transition</div>
@@ -56,9 +39,16 @@
           <div class="topic-desc">
             4 フェーズの遷移パイプライン (slot処理 → ヘッダ検証 → ペイロード実行
             → state root検証) と、状態・ブロックの解剖図。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
+          </div>        </a>
+
+        <a class="topic-card available" href="p2p/index.html">
+          <div class="topic-section">§5 · The Peer-to-Peer Layer</div>
+          <div class="topic-name">P2P レイヤー</div>
+          <div class="topic-desc">
+            Discovery v5 (Kademlia/XOR探索)、QUIC (HOLブロッキング/RTT)、
+            Gossipsub (mesh伝播)、Request-Response、そして新規ノードの
+            参加〜稼働ライフサイクルを横断する総まとめ。
+          </div>        </a>
 
         <a class="topic-card available" href="consensus/index.html">
           <div class="topic-section">§6 · Consensus Mechanisms</div>
@@ -66,9 +56,7 @@
           <div class="topic-desc">
             source–target–head の関係、attestation のライフサイクルと集約、
             justification / finalization の進行。Proposer の set-cover パッキングも。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
+          </div>        </a>
 
         <a class="topic-card available" href="protocol/index.html">
           <div class="topic-section">§2–6 · 統括 (全章)</div>
@@ -77,14 +65,7 @@
             全章を1本のスロット・ハートビートで統合した「生きたチェーン」。
             さらに GHOST フォーク選択で、一時的フォーク・ネットワーク分断・
             二重提案など chain がフォークする複雑シナリオと reorg も再現。
-          </div>
-          <span class="topic-status">▶ 利用可能</span>
-        </a>
-      </div>
-
-      <div class="landing-foot">
-        各シミュレータは <code>shared/</code> の core (描画・UI ヘルパ) と汎用シェルを共有しています。
-        新しいトピックは <code>&lt;topic&gt;/</code> ディレクトリを追加するだけで増やせます。
+          </div>        </a>
       </div>
     </div>
   </body>
