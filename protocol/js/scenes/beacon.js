@@ -239,11 +239,21 @@
       }
     },
 
-    /** I2 — Signature Aggregation: aggregators bundle the slot's votes into one proof.
-     *  The visual folding into the aggregator runs continuously via attestation
-     *  particles; this marks the discrete interval-2 action point (timeline.py). */
+    /** I2 — Signature Aggregation: the aggregator bundles the slot's pending votes
+     *  into one aggregate (Sagg) and broadcasts it toward the chain. Tallying the
+     *  votes per target happens here; acceptance into fork choice waits for I4. */
     aggregateVotes() {
       this.aggregatedThisSlot = true;
+      const tally = new Map();
+      for (const voter of this.voters || []) {
+        if (voter.voteState === "pending" && voter.voteTarget) {
+          tally.set(voter.voteTarget, (tally.get(voter.voteTarget) || 0) + 1);
+        }
+      }
+      this.slotTally = tally;
+      this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
+      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
+      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
     },
 
     /** I3 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
@@ -252,22 +262,16 @@
       this.safeTargetSlot = this.fork.latestJustified.slot;
     },
 
-    /** I4 — Attestation Acceptance: votes apply to fork choice (GHOST head moves). */
+    /** I4 — Attestation Acceptance: pending votes apply to fork choice (GHOST head moves). */
     acceptAttestations() {
       this.acceptedThisSlot = true;
-      const tally = new Map();
       for (const voter of this.voters || []) {
         if (voter.voteState === "pending" && voter.voteTarget) {
           voter.voteState = "accepted";
           voter.voteTarget.weight += 1;
-          tally.set(voter.voteTarget, (tally.get(voter.voteTarget) || 0) + 1);
         }
       }
-      this.slotTally = tally;
-      this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
       this.fork.recomputeHead();
-      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
-      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
     },
 
     /** Slot end: each block voted this slot becomes an aggregate, pooled for the
@@ -372,6 +376,8 @@
       this.auto = false;
       if (!this.proposedThisSlot) this.proposeBlock();
       if (!this.attestedThisSlot) this.castAttestations();
+      // Manual step skips particle travel; mark voters pending so I2 can tally them.
+      for (const voter of this.voters || []) { if (voter.voteState === "none") voter.voteState = "pending"; }
       this.collectedSigs = this.expectedVotes || 0;
       if (!this.aggregatedThisSlot) this.aggregateVotes();
       if (!this.safeTargetThisSlot) this.updateSafeTarget();
