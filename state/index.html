@@ -42,13 +42,14 @@
       </aside>
     </main>
 
-    <!-- Script load order: shared core → scenes → scene order → app shell -->
+    <!-- Script load order: shared core → anatomy data → scene → order → shell -->
     <script src="../shared/core.js"></script>
+    <script src="js/anatomy-data.js"></script>
     <script src="js/scenes/pipeline.js"></script>
-    <script src="js/scenes/anatomy.js"></script>
     <script>
-      // Tab order: pipeline (§4.3) first as the star scene, then anatomy (§4.1)
-      window.P2P_SCENE_ORDER = ["pipeline", "anatomy"];
+      // Single integrated scene: the §4.3 transition pipeline rendered over the
+      // full §4.1–4.2 state/block anatomy (the former "anatomy" tab folded in).
+      window.P2P_SCENE_ORDER = ["pipeline"];
     </script>
     <script src="../shared/app.js"></script>
   </body>
