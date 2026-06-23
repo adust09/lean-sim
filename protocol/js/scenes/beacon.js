@@ -21,6 +21,9 @@
 
   const SLOT_DURATION = 12.0; // real cadence: 12s per slot (5 intervals of 2.4s)
   const INTERVAL_COUNT = 5;   // INTERVALS_PER_SLOT (config.py)
+  // Per-interval wall-time at speed 1 (12s / 5 = 2.4s). Every interval's motion
+  // is sized to this so it finishes exactly when the interval ends.
+  const INTERVAL_DURATION = SLOT_DURATION / INTERVAL_COUNT;
   const BRANCH_COLOR = ["#2f6df6", "#f6a52f"]; // group 0 / group 1 during a fork
 
   // The five-interval slot pipeline — action points per timeline.py tick_interval.
@@ -212,9 +215,13 @@
         block.proposerIndex = proposer.index;
         proposer.hasBlock = true;
         if (block.hidden) continue; // withheld branch is not broadcast — no propagation particles
-        for (const validator of this.validators) {
-          if (validator.index === proposer.index || !validator.online) continue;
-          const duration = 0.5 + util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / 600;
+        // Normalize by the farthest target so the last block lands exactly at I0's end.
+        const targets = this.validators.filter((v) => v.index !== proposer.index && v.online);
+        const maxDist = Math.max(1, ...targets.map((v) => util.distance(this.vx(proposer), this.vy(proposer), this.vx(v), this.vy(v))));
+        for (const validator of targets) {
+          // I0 block propagation: nearer nodes receive earlier; the farthest at I0's end.
+          const reach = util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / maxDist;
+          const duration = INTERVAL_DURATION * (0.45 + 0.55 * reach);
           this.particles.push({ fromIndex: proposer.index, toIndex: validator.index, t: 0, duration });
         }
       }
@@ -245,7 +252,8 @@
       this.expectedVotes = voters.length;
       for (const voter of voters) {
         voter.voteTarget = this.fork.voteTargetFor(voter.group, this.scenario);
-        this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: 0.6 + this.rng() * 0.5 });
+        // I1 voting: staggered, but the last dot lands exactly at interval 1's end.
+        this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: INTERVAL_DURATION * (0.6 + 0.4 * this.rng()) });
       }
     },
 
@@ -263,7 +271,8 @@
       this.slotTally = tally;
       this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
       const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
-      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
+      // I2 aggregation: the Sagg bundle travels the whole interval, landing at I2's end.
+      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: INTERVAL_DURATION, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
     },
 
     /** I3 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
@@ -374,9 +383,10 @@
       this.aggregatePulse = Math.max(0, this.aggregatePulse - dt * 3.5);
 
       // I3 / I4 motion timers: ring pulse, acceptance ripple, head glide.
-      this.safeTargetPulse = Math.max(0, this.safeTargetPulse - dt * 1.4);
-      this.acceptPulse = Math.max(0, this.acceptPulse - dt * 1.4);
-      if (this.headMoveTo) this.headMoveProgress = Math.min(1, this.headMoveProgress + dt / 0.7);
+      // I3 / I4 motions each span exactly one interval so they end on its boundary.
+      this.safeTargetPulse = Math.max(0, this.safeTargetPulse - dt / INTERVAL_DURATION);
+      this.acceptPulse = Math.max(0, this.acceptPulse - dt / INTERVAL_DURATION);
+      if (this.headMoveTo) this.headMoveProgress = Math.min(1, this.headMoveProgress + dt / INTERVAL_DURATION);
 
       // I3 — the aggregate bundle flies to the chain; the weight bar fills to the
       // leading branch's vote count (so a 60/40 split visibly stalls below 2/3).
@@ -597,7 +607,7 @@
         ? `Υ(S,B) §4.3 — proposer#${this.proposerForGroup(0).index} 算出 → ${reVerified}/${this.onlineCount()} ノード再実行・state_root 照合✓`
         : "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)";
       draw.label(ctx, title, x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 10px ui-monospace, monospace", "left");
-      const phase = active ? util.clamp(Math.floor(this.slotTimer / 0.5), 0, 4) : -1;
+      const phase = active ? util.clamp(Math.floor(this.slotTimer / (INTERVAL_DURATION / 4)), 0, 4) : -1;
       const chipWidth = (width - 24 - 18) / 4;
       for (let i = 0; i < UPSILON_PHASES.length; i++) {
         const cx = x + 12 + i * (chipWidth + 6);
