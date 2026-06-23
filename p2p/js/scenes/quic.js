@@ -22,7 +22,7 @@
   const scene = {
     id: "quic",
     title: "QUIC トランスポート",
-    sectionRef: "5.3",
+    sectionRef: "transport/quic/",
     descriptionHTML: `
       <p><b>QUIC は UDP 上の信頼性つきトランスポート。</b>TCP と同じ保証(順序・再送・輻輳制御)を
       ユーザ空間で提供しつつ、TCP の構造的な弱点を取り除く。</p>

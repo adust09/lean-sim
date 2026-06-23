@@ -27,7 +27,7 @@
   const scene = {
     id: "discovery",
     title: "Discovery v5",
-    sectionRef: "5.2",
+    sectionRef: "enr/ (discv5: 予定)",
     descriptionHTML: `
       <p style="color:#8da2bd"><b>注:</b> 現行の leanSpec 参照実装は、ピア発見を
       <b>ENR から解決した静的ブートストラップピア</b>で行い(<code>cli/bootstrap.py</code>,

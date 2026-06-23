@@ -123,7 +123,7 @@
   const scene = {
     id: "lifecycle",
     title: "ノードの一生",
-    sectionRef: "5.2–5.5",
+    sectionRef: "node/networking/",
     descriptionHTML: `
       <p><b>1つのノードが Network に参加してからブロックを生成するまで</b>を、1本の
       シナリオとして俯瞰する総まとめ。上部のパイプラインが全行程、下の大パネルが

@@ -27,7 +27,7 @@
   const scene = {
     id: "reqresp",
     title: "Request-Response",
-    sectionRef: "5.5",
+    sectionRef: "reqresp/",
     descriptionHTML: `
       <p><b>Gossip がブロードキャストなのに対し、Req/Resp は 1対1 の直接対話。</b>
       同期で履歴を取り寄せたり、取りこぼした特定ブロックをピンポイントで要求する。</p>

@@ -38,7 +38,7 @@
   const scene = {
     id: "beacon",
     title: "ビーコンチェーン稼働",
-    sectionRef: "2–6",
+    sectionRef: "forks/lstar/",
     descriptionHTML: `
       <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 5つのインターバル(§3)が毎スロットを駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">

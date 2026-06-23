@@ -43,7 +43,7 @@
   const scene = {
     id: "slotclock",
     title: "スロットクロック",
-    sectionRef: "3.1",
+    sectionRef: "config.py · clock.py",
     descriptionHTML: `
       <p><b>スロットクロック</b>はジェネシス時刻 t<sub>g</sub> と現在時刻 t から
       スロット番号とインターバル番号を導出する純粋な計算式です。</p>

@@ -59,10 +59,10 @@
   };
 
   const PHASE_LABELS = [
-    { number: 1, title: "時刻同期", sectionRef: "§4.3.1" },
-    { number: 2, title: "ヘッダ検証", sectionRef: "§4.3.2" },
-    { number: 3, title: "ペイロード実行", sectionRef: "§4.3.3" },
-    { number: 4, title: "state root 検証", sectionRef: "§4.3.4" },
+    { number: 1, title: "時刻同期", sectionRef: "process_slots" },
+    { number: 2, title: "ヘッダ検証", sectionRef: "process_block_header" },
+    { number: 3, title: "ペイロード実行", sectionRef: "process_attestations" },
+    { number: 4, title: "state root 検証", sectionRef: "state_root 照合" },
   ];
 
   const TICK_DURATION = 0.6; // seconds per animation step
@@ -71,7 +71,7 @@
   const scene = {
     id: "pipeline",
     title: "状態遷移パイプライン",
-    sectionRef: "4.1–4.3",
+    sectionRef: "state_transition.py",
     descriptionHTML: `
       <p><b>状態遷移関数 S<sub>n+1</sub> = Υ(S<sub>n</sub>, B)</b> を、状態とブロックの
       <b>完全な構造（解剖）</b>の上で実行する統合ビューです。上部が各フェーズの処理（実行ログ）、

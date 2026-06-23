@@ -52,7 +52,7 @@
   const scene = {
     id: "aggregation",
     title: "署名集約と統合",
-    sectionRef: "6.4",
+    sectionRef: "containers/aggregation.py",
     descriptionHTML: `
       <p><b>Part 1 — 単一メッセージ集約 (SingleMessageAggregate):</b></p>
       <p>同じ AttestationData(メッセージ)に投票したバリデータの XMSS 署名

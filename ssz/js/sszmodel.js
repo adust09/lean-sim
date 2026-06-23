@@ -10,8 +10,9 @@
  * Each container flows through serialize (§2.3) → merkleize (§2.4) → proof
  * (§2.5). Field kinds: "fixed" (inline), "variable" (List/Bitlist → 4-byte
  * offset + data in the variable part), "nested" (a fixed-size sub-container
- * whose hash_tree_root becomes the leaf). Hash = deterministic 4-hex rolling
- * polynomial (no real SHA-256 needed).
+ * whose hash_tree_root becomes the leaf). The leanSpec reference
+ * (crypto/merkleization.py) merkleizes with SHA-256 over 32-byte chunks; this
+ * visualization uses a deterministic 4-hex rolling polynomial as a stand-in.
  */
 "use strict";
 

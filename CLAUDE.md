@@ -32,7 +32,7 @@ A single shared shell drives every topic. The big picture spans three layers:
 
 Every scene object implements this contract (consumed by `app.js`):
 
-- Metadata: `id`, `title`, `sectionRef` (e.g. `"2.3"`, used for the `§` badge/tab), `descriptionHTML`.
+- Metadata: `id`, `title`, `sectionRef` (a leanSpec implementation file/module reference, e.g. `"config.py"` or `"node/networking/"`, shown in the badge/tab), `descriptionHTML`.
 - Lifecycle: `init(env)` (env = `{width, height}`, called once on first activation), `resize(w, h)`, `update(dt)` (dt in seconds, capped at 0.05), `render(ctx)`.
 - Interaction: `onMouse(type, x, y)` where `type` is `"move"` or `"click"` (optional).
 - Panels: `getStats()` returns `[{label, value}]` rows (diffed each frame); `buildControls(container)` appends `P2P.ui` controls.
@@ -42,4 +42,4 @@ Every scene object implements this contract (consumed by `app.js`):
 - Keep scene logic inside the scene file's IIFE; reach shared functionality only through the `P2P.*` namespace.
 - Use `P2P.util.makeRng(seed)` for any randomness so layouts/animations stay reproducible.
 - Adding a topic: create `<topic>/index.html` (copy an existing one), add scene files under `<topic>/js/scenes/`, set `P2P_SCENE_ORDER`, and add a card to the root `index.html`. No other wiring is needed.
-- Scene files anchor explanations to specific spec sections — the leading block comment cites the `§` it visualizes; keep that mapping accurate when editing.
+- Scene files anchor explanations to the leanSpec Python reference implementation — the leading block comment cites the implementation file(s) it visualizes; keep that mapping accurate when editing. (The simulators were synced to the `leanEthereum/leanSpec` `main` Python code; verify values against that code, not the older PDF.)

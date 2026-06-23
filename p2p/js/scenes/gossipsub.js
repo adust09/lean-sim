@@ -23,7 +23,7 @@
   const scene = {
     id: "gossipsub",
     title: "Gossipsub 伝播",
-    sectionRef: "5.4",
+    sectionRef: "gossipsub/",
     descriptionHTML: `
       <p><b>問題:</b> 1つのブロックを数千ノードへ数秒で届けたい。全員が全部を転送すると
       帯域が溢れ、DHT のように1ホップずつ正確に配ると遅延が積み重なる。</p>

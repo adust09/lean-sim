@@ -11,14 +11,14 @@
       <div class="landing-hero">
         <h1>lean-sim</h1>
         <p>
-          <code>lean_consensus</code> の各章で説明される仕組みを、ブラウザ上で動かして
+          <code>leanEthereum/leanSpec</code> のリファレンス実装(Python)の各仕組みを、ブラウザ上で動かして
           直感的に理解するためのインタラクティブ・シミュレータ集です。
         </p>
       </div>
 
       <div class="topic-grid">
         <a class="topic-card available" href="ssz/index.html">
-          <div class="topic-section">§2 · Simple Serialize</div>
+          <div class="topic-section">ssz/ · Simple Serialize</div>
           <div class="topic-name">SSZ エンコーディング</div>
           <div class="topic-desc">
             シリアライズのオフセット、Merkleization とハッシュツリールート、
@@ -26,7 +26,7 @@
           </div>        </a>
 
         <a class="topic-card available" href="time/index.html">
-          <div class="topic-section">§3 · The Time Model</div>
+          <div class="topic-section">config.py · The Time Model</div>
           <div class="topic-name">時間モデル</div>
           <div class="topic-desc">
             スロットと4つのインターバル、リアルタイムのスロットクロック、
@@ -34,7 +34,7 @@
           </div>        </a>
 
         <a class="topic-card available" href="state/index.html">
-          <div class="topic-section">§4 · State Transition</div>
+          <div class="topic-section">state_transition.py · State Transition</div>
           <div class="topic-name">状態遷移関数</div>
           <div class="topic-desc">
             4 フェーズの遷移パイプライン (slot処理 → ヘッダ検証 → ペイロード実行
@@ -42,7 +42,7 @@
           </div>        </a>
 
         <a class="topic-card available" href="p2p/index.html">
-          <div class="topic-section">§5 · The Peer-to-Peer Layer</div>
+          <div class="topic-section">node/networking/ · The Peer-to-Peer Layer</div>
           <div class="topic-name">P2P レイヤー</div>
           <div class="topic-desc">
             Discovery v5 (Kademlia/XOR探索)、QUIC (HOLブロッキング/RTT)、
@@ -51,7 +51,7 @@
           </div>        </a>
 
         <a class="topic-card available" href="consensus/index.html">
-          <div class="topic-section">§6 · Consensus Mechanisms</div>
+          <div class="topic-section">fork_choice.py · Consensus Mechanisms</div>
           <div class="topic-name">コンセンサス</div>
           <div class="topic-desc">
             source–target–head の関係、attestation のライフサイクルと集約、
@@ -59,7 +59,7 @@
           </div>        </a>
 
         <a class="topic-card available" href="protocol/index.html">
-          <div class="topic-section">§2–6 · 統括 (全章)</div>
+          <div class="topic-section">forks/lstar/ · 統括 (全体)</div>
           <div class="topic-name">ビーコンチェーン稼働 / フォーク</div>
           <div class="topic-desc">
             全章を1本のスロット・ハートビートで統合した「生きたチェーン」。

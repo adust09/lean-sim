@@ -74,7 +74,7 @@
   const scene = {
     id: "timinggame",
     title: "タイミングゲーム",
-    sectionRef: "3.2",
+    sectionRef: "timeline.py",
     descriptionHTML: `
       <p><b>提案タイミングと伝搬</b>：提案者は各スロット先頭でブロックを
       ブロードキャストします。leanSpec には<b>スロット内の固定投票デッドラインは無く</b>、
