@@ -86,9 +86,12 @@
       label: "購読",
       section: "5.4",
       sceneKey: "gossipsub",
-      narration: "トピックを購読し GRAFT で mesh に参加。heartbeat が mesh サイズを保つ(GRAFT / PRUNE)。",
+      narration: "トピックを購読し GRAFT で mesh に参加。自ノードが各ピアへ順に GRAFT を送り mesh を組み上げる。",
       onEnter() {
-        P2P.scenes.gossipsub.clearMessage();
+        const gossip = P2P.scenes.gossipsub;
+        gossip.clearMessage();
+        const alive = gossip.nodes.filter((node) => node.alive);
+        if (alive.length) gossip.subscribeJoin(util.pickRandom(gossip.rng, alive).index);
       },
       isDone(host) {
         return host.stageTime >= 5;
@@ -102,6 +105,12 @@
       narration: "一人前の参加者に。自ノードがブロックを発行し、eager push が mesh を伝って全体へ広がる。",
       onEnter() {
         const gossip = P2P.scenes.gossipsub;
+        // Publish from the same node that subscribed in ④, so the story is one node.
+        const self = gossip.nodes[gossip.selfIndex];
+        if (self && self.alive) {
+          gossip.publishFrom(gossip.selfIndex);
+          return;
+        }
         const alive = gossip.nodes.filter((node) => node.alive);
         if (alive.length) gossip.publishFrom(util.pickRandom(gossip.rng, alive).index);
       },

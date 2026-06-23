@@ -18,6 +18,7 @@
   const HEARTBEAT_INTERVAL = 0.7; // simulated seconds, per the spec (~700ms).
   const DATA_PIXELS_PER_SECOND = 240;
   const CONTROL_PIXELS_PER_SECOND = 420; // IHAVE / IWANT metadata travels light.
+  const GRAFT_STAGGER = 0.6; // seconds between GRAFT emissions while a node subscribes.
 
   const scene = {
     id: "gossipsub",
@@ -68,6 +69,11 @@
     publishTime: 0,
     lastReachTime: 0,
 
+    // Lifecycle ④ subscribe state: the node we follow GRAFTing into the mesh.
+    selfIndex: -1,
+    graftQueue: [],
+    graftTimer: 0,
+
     // tunables (driven by controls)
     nodeCount: 60,
     meshDegree: 4,
@@ -111,6 +117,9 @@
       this.publishTime = 0;
       this.lastReachTime = 0;
       this.resetCounters();
+      this.selfIndex = -1;
+      this.graftQueue = [];
+      this.graftTimer = 0;
 
       const nodes = [];
       // Rejection sampling for roughly even spacing in normalized space.
@@ -283,6 +292,7 @@
     meshMaintenance() {
       for (const node of this.nodes) {
         if (!node.alive) continue;
+        if (node.subscribing) continue; // joins via its own staggered GRAFT
         // Recruitment: mesh too small -> GRAFT new peers.
         if (node.mesh.size < this.dLow) {
           const options = util.shuffleInPlace(
@@ -378,10 +388,71 @@
         node.hasMessage = false;
         node.receivedTime = -1;
         node.isSource = false;
+        node.subscribing = false;
       }
       this.particles = [];
       this.messageId = 0;
+      this.graftQueue = [];
       this.resetCounters();
+    },
+
+    /* ------------------------- subscribe (GRAFT into mesh) ------------------------- */
+    /**
+     * Lifecycle ④ (購読): a node subscribes to the topic and GRAFTs into the
+     * mesh. We empty its mesh so the join is visible, then GRAFT toward eligible
+     * peers one at a time (staggered in update) — the mesh forms edge by edge
+     * instead of appearing fully wired, which is what makes the stage move.
+     */
+    subscribeJoin(nodeIndex) {
+      const node = this.nodes[nodeIndex];
+      if (!node || !node.alive) return;
+      this.selfIndex = nodeIndex;
+      for (const meshIndex of node.mesh) this.nodes[meshIndex].mesh.delete(nodeIndex);
+      node.mesh.clear();
+      node.subscribing = true;
+      node.subscribeTime = this.simTime;
+      this.graftQueue = util.shuffleInPlace(
+        this.rng,
+        node.peers.filter((peerIndex) => this.nodes[peerIndex].alive),
+      );
+      this.graftTimer = 0;
+    },
+
+    /** Emit the next staggered GRAFT from the subscribing node into the mesh. */
+    emitSubscribeGraft() {
+      const node = this.nodes[this.selfIndex];
+      if (!node || !node.alive || node.mesh.size >= this.meshDegree) {
+        this.graftQueue = [];
+        return;
+      }
+      while (this.graftQueue.length) {
+        const peerIndex = this.graftQueue.shift();
+        const peer = this.nodes[peerIndex];
+        if (!peer || !peer.alive || node.mesh.has(peerIndex) || peer.mesh.size >= this.dHigh) {
+          continue;
+        }
+        node.mesh.add(peerIndex);
+        peer.mesh.add(node.index);
+        this.stats.grafts++;
+        // GRAFT out, and the peer GRAFTs back — mesh membership is bidirectional.
+        this.spawnParticle(node.index, peerIndex, "graft", null);
+        this.spawnParticle(peerIndex, node.index, "graft", null);
+        return;
+      }
+    },
+
+    /** Drain the subscribe GRAFT queue, one emission per GRAFT_STAGGER. */
+    advanceSubscribe(dt) {
+      if (this.selfIndex < 0 || !this.graftQueue.length) return;
+      this.graftTimer += dt;
+      while (this.graftTimer >= GRAFT_STAGGER && this.graftQueue.length) {
+        this.graftTimer -= GRAFT_STAGGER;
+        this.emitSubscribeGraft();
+      }
+      if (!this.graftQueue.length) {
+        const self = this.nodes[this.selfIndex];
+        if (self) self.subscribing = false;
+      }
     },
 
     /* ------------------------- update ------------------------- */
@@ -395,6 +466,7 @@
         this.heartbeatTimer -= HEARTBEAT_INTERVAL;
         this.runHeartbeat();
       }
+      this.advanceSubscribe(dt);
 
       const survivors = [];
       for (const particle of this.particles) {
@@ -483,8 +555,10 @@
           draw.line(ctx, this.pixelX(from), this.pixelY(from), x, y, colors.iwant, 1.4, true);
           draw.disc(ctx, x, y, 3, colors.iwant, null);
         } else if (particle.type === "graft") {
+          draw.line(ctx, this.pixelX(from), this.pixelY(from), x, y, colors.graft, 1.6, true);
           draw.disc(ctx, x, y, 3.5, colors.graft, null);
         } else if (particle.type === "prune") {
+          draw.line(ctx, this.pixelX(from), this.pixelY(from), x, y, colors.prune, 1.6, true);
           draw.disc(ctx, x, y, 3.5, colors.prune, null);
         }
       }
@@ -505,6 +579,13 @@
         // Duplicate-drop flash (red) ring.
         if (node.dupFlash !== undefined && this.simTime - node.dupFlash < 0.4) {
           draw.disc(ctx, x, y, radius + 4, null, colors.prune, 2);
+        }
+        // Lifecycle ④: the node we follow subscribing — pulsing GRAFT highlight.
+        if (node.index === this.selfIndex && this.messageId === 0) {
+          const pulse = 0.5 + 0.5 * Math.sin(this.simTime * 6);
+          draw.glow(ctx, x, y, radius * (2.2 + pulse), colors.graft);
+          draw.disc(ctx, x, y, radius + 5, null, colors.graft, 2);
+          draw.label(ctx, "購読 GRAFT", x, y - radius - 11, colors.graft, "11px ui-monospace, monospace");
         }
         let fill = colors.node;
         if (node.isSource) fill = colors.nodeSource;
