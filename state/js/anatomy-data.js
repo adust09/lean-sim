@@ -1,7 +1,7 @@
 /*
- * anatomy-data.js — Shared state/block anatomy metadata + renderers (§4.1–4.2).
+ * anatomy-data.js — Shared state/block anatomy metadata + renderers (containers/state.py).
  *
- * Extracted so the integrated pipeline scene (§4.3) can render the FULL field
+ * Extracted so the integrated pipeline scene (state_transition.py) can render the FULL field
  * structure of the State container and the Block while staying under the
  * per-file size budget. Exposes `P2P.stateAnatomy`:
  *   - FIELD_CATALOG / SECTION_GROUPS  — field metadata + group colors

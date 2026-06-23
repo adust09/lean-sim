@@ -1,7 +1,7 @@
 /*
  * forkmodel.js — reusable fork-tree + LMD-GHOST model for the capstone scene.
  *
- * Extracted so the beacon scene can simulate fork scenarios (§6.3) without the
+ * Extracted so the beacon scene can simulate fork scenarios (fork_choice.py) without the
  * scene file exceeding the 800-line limit. Holds the block TREE, GHOST head
  * selection, justification/finalization on the tree, reorg detection, scenario
  * transitions, and the bottom-of-screen tree rendering. The beacon scene drives
@@ -127,7 +127,7 @@
         return this.blocks.filter((b) => b.children.length === 0);
       },
 
-      /* ------------------------- fork engine (§6.3) ------------------------- */
+      /* ------------------------- fork engine (fork_choice.py) ------------------------- */
       /** Create this slot's block(s). Returns [{block, group}]; sets competing for forks. */
       proposeSlot(slot) {
         this.competing = null;

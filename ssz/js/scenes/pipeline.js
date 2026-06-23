@@ -1,15 +1,15 @@
 /*
- * pipeline.js — Unified SSZ pipeline (§2.3–2.5) on one screen, with selectable
+ * pipeline.js — Unified SSZ pipeline (ssz/) on one screen, with selectable
  * containers (PDF teaching examples + real leanSpec types; see sszmodel.js).
  *
  * The chosen container flows top→bottom through every stage:
  *   ① 構造        — the container's fields.
  *   ② シリアライズ — fixed/nested fields inline + variable fields as 4-byte
- *                    offsets into the variable part (§2.3).
+ *                    offsets into the variable part (ssz/container.py).
  *   ③ マークル化   — each field's hash_tree_root is a leaf (zero-padded to a
- *                    power of two); pair-hash down to hash_tree_root (§2.4).
+ *                    power of two); pair-hash down to hash_tree_root (crypto/merkleization.py).
  *   ④ 証明・検証   — a field's gindex + sibling witnesses recompute the root
- *                    and compare to the trusted root (§2.5).
+ *                    and compare to the trusted root (crypto/merkleization.py).
  *
  * Click a field (struct box / byte segment / leaf) to choose the proof target;
  * "検証 ▶" animates the recomputation.
@@ -27,20 +27,20 @@
     title: "SSZ パイプライン",
     sectionRef: "ssz/ · merkleization.py",
     descriptionHTML: `
-      <p><b>SSZ を構造からハッシュツリールート、証明まで1本の流れで (§2.3–2.5)。</b>
+      <p><b>SSZ を構造からハッシュツリールート、証明まで1本の流れで (ssz/)。</b>
       コンテナを選ぶと、それが上から下へ各ステージを通る。</p>
       <ol style="padding-left:18px;margin:0 0 9px">
         <li><b>① 構造:</b> 選択中のコンテナのフィールド。</li>
-        <li><b>② シリアライズ (§2.3):</b> 固定/ネストはインライン、可変(List/Bitlist)は
+        <li><b>② シリアライズ (ssz/container.py):</b> 固定/ネストはインライン、可変(List/Bitlist)は
         4バイトの <b>offset</b> を残し実データを<b>可変部</b>へ。リスト長が変わっても固定位置は不変。</li>
-        <li><b>③ マークル化 (§2.4):</b> 各フィールドの hash_tree_root が葉(2の冪へ <b>zero-padding</b>)。
+        <li><b>③ マークル化 (crypto/merkleization.py):</b> 各フィールドの hash_tree_root が葉(2の冪へ <b>zero-padding</b>)。
         ペアを下へハッシュして <code>hash_tree_root</code> に至る。実装(<code>crypto/merkleization.py</code>)の
         ハッシュは <b>SHA-256</b>(32B チャンク)。本図は見やすさのため疑似ハッシュ(4桁hex)で表示。
         ※ XMSS 署名内部は Poseidon/KoalaBear で、SSZ merkleization の SHA-256 とは別。</li>
-        <li><b>④ 証明・検証 (§2.5):</b> <code>gindex = 2<sup>depth</sup> + position</code>。
+        <li><b>④ 証明・検証 (crypto/merkleization.py):</b> <code>gindex = 2<sup>depth</sup> + position</code>。
         対象葉の<b>兄弟(witness)</b>でルートを再計算して照合。</li>
       </ol>
-      <p><b>プリセット:</b> 「PDF 教材例」= ValidatorRecord(§2.3 仮想・offset)/ Validator(§2.5 Ethereum)。
+      <p><b>プリセット:</b> 「PDF 教材例」= ValidatorRecord(ssz/container.py 仮想・offset)/ Validator(crypto/merkleization.py Ethereum)。
       「leanSpec 実装」= Checkpoint / Validator(本物) / AttestationData(ネスト) / BlockHeader(深い木+padding)。
       フィールド数で木の深さ・gindex・padding が変わる。</p>
       <p><b>フィールド種別:</b> 固定 / 可変(offset) / ネスト(子コンテナの htr が葉) / padding(zero)。</p>
@@ -182,7 +182,7 @@
       const { layout, fixedSegs, varSegs, fixedEndX } = this.segments();
       const top = this.serializeTop();
       const offNote = layout.varParts.length ? "" : " (可変なし=全固定)";
-      draw.label(ctx, `② シリアライズ (§2.3) — 固定部 ${layout.fixedBytes}B + 可変部 ${layout.variableBytes}B = 合計 ${layout.totalBytes}B${offNote}`, 30, top - 18, colors.accent, "bold 12px ui-monospace, monospace", "left");
+      draw.label(ctx, `② シリアライズ (ssz/container.py) — 固定部 ${layout.fixedBytes}B + 可変部 ${layout.variableBytes}B = 合計 ${layout.totalBytes}B${offNote}`, 30, top - 18, colors.accent, "bold 12px ui-monospace, monospace", "left");
       const h = 40;
       if (varSegs.length) draw.line(ctx, fixedEndX, top - 8, fixedEndX, top + h + 10, colors.textDim, 1.4, true);
       for (const seg of fixedSegs) {
@@ -222,7 +222,7 @@
 
     renderTree(ctx) {
       const base = this.base();
-      draw.label(ctx, `③ マークル化 (§2.4) — 葉 ${this.fields().length}→${base} (深さ ${this.depth()}, padding ${base - this.fields().length})`, 30, 198, colors.accent, "bold 12px ui-monospace, monospace", "left");
+      draw.label(ctx, `③ マークル化 (crypto/merkleization.py) — 葉 ${this.fields().length}→${base} (深さ ${this.depth()}, padding ${base - this.fields().length})`, 30, 198, colors.accent, "bold 12px ui-monospace, monospace", "left");
       // edges
       for (let g = 1; g < base; g++) {
         const a = this.gindexPos(g);
@@ -302,7 +302,7 @@
       ctx.restore();
       let ly = y + 18;
       const cx = x + 12;
-      draw.label(ctx, "④ 証明・検証 (§2.5)", cx, ly, colors.accent, "bold 11px ui-monospace, monospace", "left"); ly += 22;
+      draw.label(ctx, "④ 証明・検証 (crypto/merkleization.py)", cx, ly, colors.accent, "bold 11px ui-monospace, monospace", "left"); ly += 22;
       draw.label(ctx, `対象: ${field.name}`, cx, ly, colors.nodeHasMessage, "bold 10px ui-monospace, monospace", "left"); ly += 18;
       draw.label(ctx, `gindex = 2^${depth} + ${this.selectedFieldIndex} = ${gindex} (${binary})`, cx, ly, colors.accent, "10px ui-monospace, monospace", "left"); ly += 18;
       const path = binary.slice(1).split("").map((b) => (b === "0" ? "左" : "右")).join("→") || "(根)";

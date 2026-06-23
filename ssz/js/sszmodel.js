@@ -3,12 +3,12 @@
  *
  * Presets cover both the PDF's teaching examples and the real leanSpec
  * implementation types (src/lean_spec/spec/forks/lstar/containers):
- *   PDF      — ValidatorRecord (§2.3, hypothetical, shows offsets),
- *              Validator (§2.5, Ethereum: pubkey/withdrawal/balance/slashed).
+ *   PDF      — ValidatorRecord (ssz/container.py, hypothetical, shows offsets),
+ *              Validator (crypto/merkleization.py, Ethereum: pubkey/withdrawal/balance/slashed).
  *   leanSpec — Checkpoint, Validator, AttestationData (nested), BlockHeader.
  *
- * Each container flows through serialize (§2.3) → merkleize (§2.4) → proof
- * (§2.5). Field kinds: "fixed" (inline), "variable" (List/Bitlist → 4-byte
+ * Each container flows through serialize (ssz/container.py) → merkleize (crypto/merkleization.py) → proof
+ * (crypto/merkleization.py). Field kinds: "fixed" (inline), "variable" (List/Bitlist → 4-byte
  * offset + data in the variable part), "nested" (a fixed-size sub-container
  * whose hash_tree_root becomes the leaf). The leanSpec reference
  * (crypto/merkleization.py) merkleizes with SHA-256 over 32-byte chunks; this
@@ -32,7 +32,7 @@
 
   const PRESETS = {
     validatorRecord: {
-      label: "ValidatorRecord (PDF §2.3 仮想)", group: "PDF 教材例",
+      label: "ValidatorRecord (PDF ssz/container.py 仮想)", group: "PDF 教材例",
       fields: [
         f("id", "uint16", 2, "fixed", "42"),
         f("signatures", "List[Bytes4]", 4, "variable", "[…]", 4),
@@ -40,7 +40,7 @@
       ],
     },
     ethValidator: {
-      label: "Validator (PDF §2.5 Ethereum)", group: "PDF 教材例",
+      label: "Validator (PDF crypto/merkleization.py Ethereum)", group: "PDF 教材例",
       fields: [
         f("pubkey", "Bytes48", 48, "fixed", "0xab12"),
         f("withdrawal_credentials", "Bytes32", 32, "fixed", "0xcc00"),
@@ -113,7 +113,7 @@
     return { hashes: h, depth, leaves };
   }
 
-  /** Fixed/variable byte layout for the serialize strip (§2.3). */
+  /** Fixed/variable byte layout for the serialize strip (ssz/container.py). */
   function serializeLayout(preset, listLength) {
     let fixedBytes = 0;
     for (const field of preset.fields) fixedBytes += field.kind === "variable" ? 4 : field.bytes;

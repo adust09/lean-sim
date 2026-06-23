@@ -1,9 +1,9 @@
 /*
- * forkchoice.js — §6.2, §6.3, §6.5.3: Fork choice, justification, and finalization.
+ * forkchoice.js — fork_choice.py, slot.py: Fork choice, justification, and finalization.
  *
  * Block tree with attestation references (source/target/head), vote accumulation,
  * supermajority justification, and finalization. Also shows the 3SF-mini admissible-
- * target ruler (§6.5.3.2). Click a block to move the head vote; "投票を追加" to add
+ * target ruler (slot.py). Click a block to move the head vote; "投票を追加" to add
  * vote weight; "次のスロット" to advance time.
  */
 "use strict";
@@ -37,7 +37,7 @@
     title: "フォーク選択と正当化",
     sectionRef: "fork_choice.py · slot.py",
     descriptionHTML: `
-      <p><b>Attestation の3参照 (§6.2):</b></p>
+      <p><b>Attestation の3参照 (fork_choice.py):</b></p>
       <ul>
         <li><span style="color:#36d399">■</span> <b>Source:</b> 最後に正当化されたチェックポイント (バリデータの「錨」)。</li>
         <li><span style="color:#fbbf24">■</span> <b>Target:</b> 次に正当化すべきチェックポイント。
@@ -48,7 +48,7 @@
       <p><b>操作:</b> ブロックをクリックでヘッド票を移動。「投票を追加」→ 2/3 超で
       <span style="color:#22d3ee">正当化</span>、連続チェーン →
       <span style="color:#36d399">確定</span>。「次のスロット」で先端を延ばす。</p>
-      <p><b>下段ルーラー (§6.5.3.2):</b>
+      <p><b>下段ルーラー (slot.py):</b>
       <span style="color:#36d399">δ≤5 即時窓</span> /
       <span style="color:#a78bfa">平方・長方形数</span> /
       <span style="color:#f87171">無効ギャップ</span></p>
@@ -416,7 +416,7 @@
       ctx.fill();
       ctx.restore();
 
-      draw.label(ctx, "§6.5.3.2 許容ターゲット距離 δ",
+      draw.label(ctx, "slot.py 許容ターゲット距離 δ",
         rulerX + rulerWidth / 2, rulerY + 8, colors.textDim, "10px ui-monospace,monospace");
 
       function admissibility(delta) {
@@ -498,7 +498,7 @@
 
       const displayControls = ui.group("表示");
       displayControls.appendChild(
-        ui.toggle("§6.5.3.2 許容ターゲットルーラー", this.showRuler, (checked) => { this.showRuler = checked; }),
+        ui.toggle("slot.py 許容ターゲットルーラー", this.showRuler, (checked) => { this.showRuler = checked; }),
       );
       container.appendChild(displayControls);
 

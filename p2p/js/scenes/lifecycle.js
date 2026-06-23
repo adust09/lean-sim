@@ -6,7 +6,7 @@
  *
  *   ①発見 → ②接続 → ③同期 → ④購読 → ⑤ブロック生成
  *
- * The large panel below replays the *actual* §5.2–5.5 motion for whichever
+ * The large panel below replays the *actual* node/networking/ motion for whichever
  * stage is active, reusing the chapter scene objects unchanged: we clip the
  * canvas to the stage panel, translate the origin, and call that scene's own
  * update()/render(). The scenario advances automatically (each stage ends when
@@ -14,11 +14,11 @@
  * continuous story rather than four separate demos.
  *
  * Stage → reused scene:
- *   ①発見  §5.2 Discovery v5      (discovery)
- *   ②接続  §5.3 QUIC 1-RTT        (quic, RTT view)
- *   ③同期  §5.5 Status + sync      (reqresp)
- *   ④購読  §5.4 GRAFT into mesh    (gossipsub, no block yet)
- *   ⑤生成  §5.4 publish + flood    (gossipsub, same network)
+ *   ①発見  enr/ Discovery v5      (discovery)
+ *   ②接続  transport/quic/ QUIC 1-RTT        (quic, RTT view)
+ *   ③同期  reqresp/ Status + sync      (reqresp)
+ *   ④購読  gossipsub/ GRAFT into mesh    (gossipsub, no block yet)
+ *   ⑤生成  gossipsub/ publish + flood    (gossipsub, same network)
  */
 "use strict";
 
@@ -129,12 +129,12 @@
       シナリオとして俯瞰する総まとめ。上部のパイプラインが全行程、下の大パネルが
       現在の段階の実モーション(5.2〜5.5 の各タブと同じシミュレーション)。</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>発見 (§5.2):</b> ピアを発見(現行 leanSpec は ENR 解決の静的ブートストラップ、
+        <li><b>発見 (enr/):</b> ピアを発見(現行 leanSpec は ENR 解決の静的ブートストラップ、
         discv5/XOR 探索は将来予定。本デモは将来機構の XOR 探索を表示)。</li>
-        <li><b>接続 (§5.3):</b> QUIC で 1-RTT 接続。</li>
-        <li><b>同期 (§5.5):</b> Status 交換 → blocks_by_range で不足ブロックを取得。</li>
-        <li><b>購読 (§5.4):</b> GRAFT して gossip mesh に参加。</li>
-        <li><b>ブロック生成 (§5.4):</b> ブロックを発行し mesh を伝播 → 全体へ。</li>
+        <li><b>接続 (transport/quic/):</b> QUIC で 1-RTT 接続。</li>
+        <li><b>同期 (reqresp/):</b> Status 交換 → blocks_by_range で不足ブロックを取得。</li>
+        <li><b>購読 (gossipsub/):</b> GRAFT して gossip mesh に参加。</li>
+        <li><b>ブロック生成 (gossipsub/):</b> ブロックを発行し mesh を伝播 → 全体へ。</li>
       </ol>
       <p>各段階はモーションが終わると自動で次へ進み、最後まで行くと最初へループする。
       「次のステージ ▶」で手動送り、「再生/一時停止」で全体を停止。

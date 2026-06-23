@@ -144,7 +144,7 @@
       this.renderFormulaReadout(ctx, formulaTop);
     },
 
-    /* ---- horizontal slot grid (Fig 3.1 style) ---- */
+    /* ---- horizontal slot grid ---- */
     renderSlotGrid(ctx, top, height) {
       const leftMargin = 24;
       const rightMargin = 24;
@@ -257,7 +257,7 @@
       draw.line(ctx, gridLeft, gridBottom - 2, gridRight, gridBottom - 2, colors.grid, 1, false);
     },
 
-    /* ---- within-slot interval bar (Fig 3.2 style) ---- */
+    /* ---- within-slot interval bar ---- */
     renderIntervalBar(ctx, top, height) {
       const leftMargin = 24;
       const rightMargin = 24;
@@ -355,7 +355,7 @@
       );
     },
 
-    /* ---- live formula readout (Fig 3.4 style) ---- */
+    /* ---- live formula readout ---- */
     renderFormulaReadout(ctx, top) {
       const leftMargin = 24;
       const panelWidth = this.width - leftMargin * 2;
