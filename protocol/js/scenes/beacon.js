@@ -91,6 +91,11 @@
     participation: 0.85,
     votesAccrued: 0,
     safeTargetSlot: 0,
+    safeTargetPulse: 0,        // I3 motion: expanding-ring pulse on the safe block
+    acceptPulse: 0,            // I4 motion: acceptance ripple on accepted nodes
+    headMoveFrom: null,        // I4 motion: GHOST head glide (old head)
+    headMoveTo: null,          //            (new head)
+    headMoveProgress: 1,
     proposedThisSlot: false,
     attestedThisSlot: false,
     aggregatedThisSlot: false,
@@ -124,6 +129,11 @@
       this.interval = 0;
       this.votesAccrued = 0;
       this.safeTargetSlot = 0;
+      this.safeTargetPulse = 0;
+      this.acceptPulse = 0;
+      this.headMoveFrom = null;
+      this.headMoveTo = null;
+      this.headMoveProgress = 1;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
       this.aggregatedThisSlot = false;
@@ -260,11 +270,13 @@
     updateSafeTarget() {
       this.safeTargetThisSlot = true;
       this.safeTargetSlot = this.fork.latestJustified.slot;
+      this.safeTargetPulse = 1; // motion: ring pulse on the anchored safe block
     },
 
     /** I4 — Attestation Acceptance: pending votes apply to fork choice (GHOST head moves). */
     acceptAttestations() {
       this.acceptedThisSlot = true;
+      const previousHead = this.fork.headBlock;
       for (const voter of this.voters || []) {
         if (voter.voteState === "pending" && voter.voteTarget) {
           voter.voteState = "accepted";
@@ -272,6 +284,12 @@
         }
       }
       this.fork.recomputeHead();
+      // motion: ripple over the just-accepted nodes + glide the head marker
+      // from the previous head to the recomputed GHOST head.
+      this.acceptPulse = 1;
+      this.headMoveFrom = previousHead;
+      this.headMoveTo = this.fork.headBlock;
+      this.headMoveProgress = 0;
     },
 
     /** Slot end: each block voted this slot becomes an aggregate, pooled for the
@@ -297,6 +315,10 @@
       this.aggregatedThisSlot = false;
       this.safeTargetThisSlot = false;
       this.acceptedThisSlot = false;
+      this.safeTargetPulse = 0;
+      this.acceptPulse = 0;
+      this.headMoveTo = null;
+      this.headMoveProgress = 1;
       this.votesAccrued = 0;
       this.fork.applyScenarioTransitions(this.scenario, this.currentSlot);
     },
@@ -350,6 +372,11 @@
       }
       this.attestationDots = survivingDots;
       this.aggregatePulse = Math.max(0, this.aggregatePulse - dt * 3.5);
+
+      // I3 / I4 motion timers: ring pulse, acceptance ripple, head glide.
+      this.safeTargetPulse = Math.max(0, this.safeTargetPulse - dt * 1.4);
+      this.acceptPulse = Math.max(0, this.acceptPulse - dt * 1.4);
+      if (this.headMoveTo) this.headMoveProgress = Math.min(1, this.headMoveProgress + dt / 0.7);
 
       // I3 — the aggregate bundle flies to the chain; the weight bar fills to the
       // leading branch's vote count (so a 60/40 split visibly stalls below 2/3).
@@ -484,6 +511,13 @@
           fill = colors.nodeSource;
           stroke = colors.nodeSource;
         }
+        // I4 acceptance ripple: an expanding ring over each just-accepted node.
+        if (this.acceptPulse > 0.02 && node.voteState === "accepted") {
+          ctx.save();
+          ctx.globalAlpha = this.acceptPulse * 0.7;
+          draw.disc(ctx, x, y, 7 + 12 * (1 - this.acceptPulse), null, colors.nodeHasMessage, 1.6);
+          ctx.restore();
+        }
         draw.disc(ctx, x, y, 7, fill, stroke, 1.4);
       }
       draw.label(ctx, "検証者メッシュ (§5)" + (this.fork.partitioned ? " — 2群に分断 (青60/橙40)" : ""), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
@@ -593,11 +627,33 @@
       draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${P2P.forkScenarios[this.scenario].label}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
       const box = { x: 30, y: this.height - 172, width: this.width - 410, height: 92 };
       this.fork.renderTree(ctx, box);
-      // I2 safe-target highlight on the anchored (latest justified) block.
+      // I3 safe-target motion: expanding-ring pulse + badge on the anchored block.
       const safe = this.fork.latestJustified;
       if (this.safeTargetThisSlot && safe.slot >= this.fork.visibleMinSlot()) {
-        draw.label(ctx, "◆ safe", this.fork.blockX(safe, box), this.fork.blockY(safe, box) - 22, colors.nodeActive, "9px ui-monospace, monospace");
+        const sx = this.fork.blockX(safe, box);
+        const sy = this.fork.blockY(safe, box);
+        if (this.safeTargetPulse > 0.01) {
+          ctx.save();
+          ctx.globalAlpha = this.safeTargetPulse;
+          draw.disc(ctx, sx, sy, util.lerp(10, 30, 1 - this.safeTargetPulse), null, colors.nodeActive, 2);
+          ctx.restore();
+        }
+        draw.label(ctx, "◆ safe target", sx, sy - 22, colors.nodeActive, "9px ui-monospace, monospace");
       }
+
+      // I4 acceptance motion: glide a head marker from the old head to the
+      // recomputed GHOST head, then hold it there for the rest of the slot.
+      if (this.acceptedThisSlot && this.headMoveTo && this.headMoveTo.slot >= this.fork.visibleMinSlot()) {
+        const fromBlock = (this.headMoveFrom && this.headMoveFrom.slot >= this.fork.visibleMinSlot())
+          ? this.headMoveFrom : this.headMoveTo;
+        const f = ease.inOutCubic(util.clamp(this.headMoveProgress, 0, 1));
+        const hx = util.lerp(this.fork.blockX(fromBlock, box), this.fork.blockX(this.headMoveTo, box), f);
+        const hy = util.lerp(this.fork.blockY(fromBlock, box), this.fork.blockY(this.headMoveTo, box), f);
+        draw.glow(ctx, hx, hy, 15 + 8 * this.acceptPulse, colors.nodeHasMessage);
+        draw.disc(ctx, hx, hy, 5, null, colors.nodeHasMessage, 1.8);
+        draw.label(ctx, "▶ GHOST head", hx, hy - 22, colors.nodeHasMessage, "9px ui-monospace, monospace");
+      }
+
       this.renderWeightBar(ctx, this.width - 366, this.height - 92);
     },
 
