@@ -1,11 +1,19 @@
 /*
- * pipeline.js — Section 4.3: The State Transition Function (4-phase pipeline).
+ * pipeline.js — Sections 4.1–4.3: State transition over the full anatomy.
  *
- * Shows an incoming block being validated through the 4 phases:
+ * Integrates the former "anatomy" explorer (§4.1–4.2) into the 4-phase
+ * transition pipeline (§4.3): the State container and the Block are drawn as
+ * their full field structure (the anatomy), and the pipeline animates a block
+ * being validated through the 4 phases on top of it.
+ *
  *   Phase 1: Time Synchronization — advance state slot to match block slot
  *   Phase 2: Header Validation — proposer / parent_root / slot checks
- *   Phase 3: Consensus Execution — attestation voting, weighting, justify, finalize
+ *   Phase 3: Consensus Execution — attestation voting, weighting, justify
  *   Phase 4: Integrity Verification — HashTreeRoot vs block.header.state_root
+ *
+ * Each phase highlights the fields it reads/writes (amber). Hover/click any
+ * field to read its role in the center panel; with nothing hovered the center
+ * shows the live step-by-step execution log.
  */
 "use strict";
 
@@ -62,51 +70,60 @@
 
   const scene = {
     id: "pipeline",
-    title: "遷移パイプライン",
-    sectionRef: "4.3",
+    title: "状態遷移パイプライン",
+    sectionRef: "4.1–4.3",
     descriptionHTML: `
-      <p><b>状態遷移関数 S<sub>n+1</sub> = Υ(S<sub>n</sub>, B)</b> は4フェーズの検証パイプラインです。
-      いずれかのフェーズが失敗するとブロックは<b>即時却下</b>され、状態は変更されません。</p>
-      <p><b>① 時刻同期 (§4.3.1):</b> state.slot をブロックのスロットまで進める。
-      スキップされた空スロットは1つずつ処理し、各スロットの state root を履歴に積む。</p>
-      <p><b>② ヘッダ検証 (§4.3.2):</b> (a) proposer_index が正しいか、
-      (b) block.parent_root が直前ブロックのハッシュと一致するか、
-      (c) block.slot &gt; parent.slot か、の3検査。</p>
-      <p><b>③ ペイロード実行 (§4.3.3):</b> 各 attestation を順番に処理。
-      source が justified 済みで target が正当なスロットなら票として計上。
-      全体の 2/3 超で target を justified に、justified チェーンが連続すれば finalized に昇格。
-      無効票はソフトフェイル(スキップ)でブロック全体は却下されない。</p>
-      <p><b>④ integrity 検証 (§4.3.4):</b> HashTreeRoot(S<sub>n+1</sub>) を計算し、
-      block.header.state_root と一致すれば受理。提案者が誤ったルートを申告した場合は却下。</p>
-      <p><b>操作:</b>「次のフェーズ ▶」で1段ずつ進める。「自動再生」で連続実行。
-      「シナリオ」で故障注入パターンを切り替えて各フェーズの棄却を確認できます。</p>`,
+      <p><b>状態遷移関数 S<sub>n+1</sub> = Υ(S<sub>n</sub>, B)</b> を、状態とブロックの
+      <b>完全な構造（解剖）</b>の上で実行する統合ビューです。上部が各フェーズの処理（実行ログ）、
+      下部が状態コンテナ（左）とブロック（右）。各フェーズは自分が読み書きするフィールドを
+      <b>橙色でハイライト</b>します。</p>
+      <p><b>① 時刻同期 (§4.3.1):</b> state.slot をブロックのスロットまで進める
+      （chrono.slot / historical_block_hashes を更新）。</p>
+      <p><b>② ヘッダ検証 (§4.3.2):</b> proposer_index・parent_root（state の
+      latest_block_header と照合）・slot の3検査。いずれか失敗で即却下。</p>
+      <p><b>③ ペイロード実行 (§4.3.3):</b> body.attestations を順に処理。source が
+      justified 済みなら重みを計上、2/3 超で target を justified に昇格。
+      無効票はソフトフェイル（スキップ）。</p>
+      <p><b>④ integrity 検証 (§4.3.4):</b> HashTreeRoot(S<sub>n+1</sub>) と
+      block.header.state_root を照合。一致で受理、嘘なら却下。</p>
+      <p><b>操作:</b> フィールドに<b>ホバー/クリック</b>すると役割の解説が中央に出ます
+      （□=固定サイズ / ◇=可変サイズ）。「次のフェーズ ▶」「自動再生」で実行、
+      「シナリオ」で故障注入を切り替え。</p>`,
 
     width: 0,
     height: 0,
     clock: 0,
     speed: 1,
     autoPlay: true,
-    endHoldClock: 0,      // time spent holding the final verdict before looping
-    emptySlotCount: 2,    // block.slot − state.slot
+    endHoldClock: 0,
+    emptySlotCount: 2,
     scenarioKey: "normal",
 
     /* Derived scenario state — rebuilt by build() */
     scenario: null,
-    stateSnapshot: null,   // initial state
-    currentState: null,    // state as phases run
+    stateSnapshot: null,
+    currentState: null,
     blockData: null,
     attestations: [],
-    phaseSteps: [],        // Array of step descriptors for each phase
-    animationClock: 0,     // phase-local sub-clock
-    currentPhaseIndex: 0,  // 0-based index into PHASE_LABELS
-    currentStepIndex: 0,   // step within current phase
-    phaseResults: [],      // "pending"|"pass"|"fail" per phase
-    finalVerdict: "pending", // "accept"|"reject"|"pending"
-    hoveredAttestationIndex: -1,
+    phaseSteps: [],
+    animationClock: 0,
+    currentPhaseIndex: 0,
+    currentStepIndex: 0,
+    phaseResults: [],
+    finalVerdict: "pending",
+
+    /* Anatomy field structure + interaction */
+    stateFields: [],
+    blockFields: [],
+    fieldHitBoxes: [],
+    hoveredFieldKey: null,
+    selectedFieldKey: null,
 
     init(env) {
       this.width = env.width;
       this.height = env.height;
+      this.stateFields = P2P.stateAnatomy.buildStateFields();
+      this.blockFields = P2P.stateAnatomy.buildBlockFields();
       this.build();
     },
 
@@ -124,12 +141,10 @@
       this.currentStepIndex = 0;
       this.phaseResults = ["pending", "pending", "pending", "pending"];
       this.finalVerdict = "pending";
-      this.hoveredAttestationIndex = -1;
       this.scenario = SCENARIOS[this.scenarioKey];
 
-      /* Initial state, plus a working copy that mutates as phases run */
       const stateSlot = 10;
-      const totalActiveStake = 3200;  // ETH (32 × 100 validators)
+      const totalActiveStake = 3200;
       this.stateSnapshot = {
         slot: stateSlot,
         latestBlockHashHex: "0xa1b2",
@@ -140,7 +155,6 @@
       };
       this.currentState = { ...this.stateSnapshot };
 
-      /* Block data */
       const blockSlot = stateSlot + this.emptySlotCount;
       const correctProposerIndex = 42;
       const correctParentRoot = "0xa1b2";
@@ -156,20 +170,20 @@
         correctParentRoot,
         correctStateRoot,
       };
-      /* Attestations in the body */
-      const validAttestationWeight = 1200;    // ETH
-      const invalidAttestationWeight = 300;   // ETH per invalid attestation
+
+      const validAttestationWeight = 1200;
+      const invalidAttestationWeight = 300;
       const totalAttestationCount = 4;
       this.attestations = [];
       for (let attestationIndex = 0; attestationIndex < totalAttestationCount; attestationIndex++) {
         const isInvalid = attestationIndex < this.scenario.invalidAttestationCount;
         this.attestations.push({
           index: attestationIndex,
-          sourceSlot: isInvalid ? 3 : 8,   // 3 = not yet justified, 8 = justified
+          sourceSlot: isInvalid ? 3 : 8,
           targetSlot: blockSlot,
           validatorWeight: isInvalid ? invalidAttestationWeight : validAttestationWeight,
           sourceJustified: !isInvalid,
-          status: "pending",  // "pending"|"counted"|"ignored"
+          status: "pending",
         });
       }
       this.phaseSteps = this.buildPhaseSteps();
@@ -178,10 +192,9 @@
     buildPhaseSteps() {
       const { emptySlotCount, stateSnapshot, blockData, attestations } = this;
       const totalActiveStake = stateSnapshot.totalActiveStake;
-      const superMajorityThreshold = Math.ceil(totalActiveStake * 2 / 3);
+      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
 
       return [
-        /* Phase 1: Time Synchronization */
         ...Array.from({ length: emptySlotCount }, (_, slotOffset) => ({
           phase: 0,
           kind: "slot-advance",
@@ -194,7 +207,6 @@
           result: "pass",
           description: `時刻同期完了: state.slot = ${blockData.slot}`,
         },
-        /* Phase 2: Header Validation — 3 checks */
         {
           phase: 1,
           kind: "header-check",
@@ -225,7 +237,6 @@
             ? "ヘッダ検証 OK"
             : "ヘッダ検証 失敗 — ブロック却下",
         },
-        /* Phase 3: Consensus Execution — per attestation */
         ...attestations.map((attestation, attestationIndex) => ({
           phase: 2,
           kind: "attestation",
@@ -240,15 +251,14 @@
           result: "pass",
           description: (() => {
             const validWeight = attestations
-              .filter(a => a.sourceJustified)
+              .filter((a) => a.sourceJustified)
               .reduce((sum, a) => sum + a.validatorWeight, 0);
-            const ratio = (validWeight / totalActiveStake * 100).toFixed(1);
+            const ratio = ((validWeight / totalActiveStake) * 100).toFixed(1);
             const justified = validWeight >= superMajorityThreshold;
             return `有効投票 ${validWeight} / ${totalActiveStake} ETH (${ratio}%) — ` +
               (justified ? `2/3 超 → justified ✓` : `2/3 未満 — 正当化なし`);
           })(),
         },
-        /* Phase 4: Integrity Verification */
         {
           phase: 3,
           kind: "state-root-check",
@@ -266,53 +276,31 @@
       ];
     },
 
-    /* Determine if a phase has failed based on scenario                */
-    phaseShouldFail(phaseIndex) {
-      if (phaseIndex === 1) {
-        return !this.scenario.proposerValid || !this.scenario.parentRootValid;
-      }
-      if (phaseIndex === 3) {
-        return !this.scenario.stateRootValid;
-      }
-      return false;
-    },
-
-    /* Advance to the next step                                         */
+    /* Step advancement                                                  */
     advanceStep() {
       if (this.finalVerdict !== "pending") return;
-
       const steps = this.phaseSteps;
       if (this.currentStepIndex >= steps.length) return;
 
-      const step = steps[this.currentStepIndex];
-      this.applyStep(step);
+      this.applyStep(steps[this.currentStepIndex]);
       this.currentStepIndex++;
 
-      // Check if we moved to a new phase
       if (this.currentStepIndex < steps.length) {
         const nextStep = steps[this.currentStepIndex];
-        if (nextStep.phase > this.currentPhaseIndex) {
-          this.currentPhaseIndex = nextStep.phase;
-        }
+        if (nextStep.phase > this.currentPhaseIndex) this.currentPhaseIndex = nextStep.phase;
       }
     },
 
     applyStep(step) {
       if (step.kind === "slot-advance") {
-        this.currentState = {
-          ...this.currentState,
-          slot: step.slotNumber,
-        };
+        this.currentState = { ...this.currentState, slot: step.slotNumber };
       } else if (step.kind === "phase-result") {
         const phaseIndex = step.phase;
         this.phaseResults[phaseIndex] = step.result;
         if (step.result === "fail") {
           this.finalVerdict = "reject";
-          // Mark remaining phases as skipped
-          for (let index = phaseIndex + 1; index < 4; index++) {
-            this.phaseResults[index] = "skipped";
-          }
-          this.currentStepIndex = this.phaseSteps.length; // skip rest
+          for (let index = phaseIndex + 1; index < 4; index++) this.phaseResults[index] = "skipped";
+          this.currentStepIndex = this.phaseSteps.length;
         } else if (phaseIndex === 3 && step.result === "pass") {
           this.finalVerdict = "accept";
         }
@@ -320,7 +308,6 @@
         const attestation = this.attestations[step.attestationIndex];
         if (attestation.sourceJustified) {
           attestation.status = "counted";
-          // Accumulate weight
           const previousWeight = this.currentState.justifiedWeight || 0;
           this.currentState = {
             ...this.currentState,
@@ -330,8 +317,6 @@
           attestation.status = "ignored";
         }
       }
-      // header-check and state-root-check steps mutate no state; they are
-      // purely informational and rendered from their own descriptions.
     },
 
     /* Update loop                                                       */
@@ -339,8 +324,6 @@
       const cappedDt = Math.min(0.05, realDt);
       if (!this.autoPlay) return;
 
-      // Once the verdict is in, hold it briefly so it is readable, then loop
-      // back to the start so the motion keeps playing without user input.
       const isFinished =
         this.finalVerdict !== "pending" && this.currentStepIndex >= this.phaseSteps.length;
       if (isFinished) {
@@ -360,60 +343,49 @@
     /* Rendering                                                         */
     render(ctx) {
       draw.clear(ctx, this.width, this.height);
+      this.fieldHitBoxes = [];
       const layout = this.computeLayout();
       this.renderPhaseTracker(ctx);
-      this.renderStatePanel(ctx, layout);
-      this.renderPhaseDetail(ctx, layout);
-      this.renderBlockPanel(ctx, layout);
-      this.renderVerdict(ctx);
+      this.renderTopPanel(ctx, layout);
+      P2P.stateAnatomy.renderStateContainer(
+        ctx, this, layout.stateColumnX, layout.bottomY, layout.stateColumnWidth, layout.bottomHeight);
+      P2P.stateAnatomy.renderBlockContainer(
+        ctx, this, layout.blockColumnX, layout.bottomY, layout.blockColumnWidth, layout.bottomHeight);
     },
 
     /*
-     * Three non-overlapping columns (state | phase detail | block), sharing a
-     * fixed gutter and clamped so the block column always fits the longest
-     * header label ("proposer_index:") plus its right-aligned value.
+     * Vertical split: phase processing on top (tracker + execution log over the
+     * full width), the state container and block side-by-side underneath.
      */
     computeLayout() {
       const outerMargin = 16;
-      const columnGap = 16;
-      const panelTop = 60;
-      const usableWidth = this.width - outerMargin * 2 - columnGap * 2;
+      const columnGap = 14;
+      const topPanelY = 50;
+      const topPanelHeight = Math.max(150, Math.min(204, Math.floor(this.height * 0.30)));
+      const bottomY = topPanelY + topPanelHeight + 12;
+      const bottomHeight = Math.max(200, this.height - bottomY - 16);
 
-      // Preferred widths: block column fits "proposer_index:" plus its value.
-      // If the preferred minimums do not fit, fall back to a proportional split
-      // so the three columns still tile the width without overlapping.
-      const minimumTotal = 248 + 190 + 220;
-      let blockColumnWidth;
-      let stateColumnWidth;
-      let detailColumnWidth;
-      if (usableWidth >= minimumTotal) {
-        blockColumnWidth = Math.max(248, Math.floor(usableWidth * 0.30));
-        stateColumnWidth = Math.max(190, Math.floor(usableWidth * 0.27));
-        detailColumnWidth = usableWidth - blockColumnWidth - stateColumnWidth;
-      } else {
-        blockColumnWidth = Math.floor(usableWidth * 0.34);
-        stateColumnWidth = Math.floor(usableWidth * 0.28);
-        detailColumnWidth = usableWidth - blockColumnWidth - stateColumnWidth;
-      }
-
-      const stateColumnX = outerMargin;
-      const detailColumnX = stateColumnX + stateColumnWidth + columnGap;
-      const blockColumnX = detailColumnX + detailColumnWidth + columnGap;
+      const usableWidth = this.width - outerMargin * 2;
+      const stateColumnWidth = Math.floor((usableWidth - columnGap) * 0.52);
+      const blockColumnWidth = usableWidth - columnGap - stateColumnWidth;
 
       return {
-        panelTop,
-        stateColumnX,
+        topPanelX: outerMargin,
+        topPanelY,
+        topPanelWidth: usableWidth,
+        topPanelHeight,
+        bottomY,
+        bottomHeight,
+        stateColumnX: outerMargin,
         stateColumnWidth,
-        detailColumnX,
-        detailColumnWidth,
-        blockColumnX,
+        blockColumnX: outerMargin + stateColumnWidth + columnGap,
         blockColumnWidth,
       };
     },
 
     /* Phase tracker bar at the top */
     renderPhaseTracker(ctx) {
-      const trackerY = 28;
+      const trackerY = 26;
       const trackerWidth = this.width - 40;
       const phaseWidth = trackerWidth / 4;
       const startX = 20;
@@ -434,7 +406,6 @@
           borderColor = colors.nodeTarget;
           textColor = colors.nodeTarget;
         } else if (result === "skipped") {
-          backgroundColor = colors.panel;
           borderColor = colors.grid;
           textColor = colors.grid;
         } else if (isCurrent) {
@@ -460,122 +431,70 @@
       }
     },
 
-    /* State panel (left side) */
-    renderStatePanel(ctx, layout) {
-      const panelX = layout.stateColumnX;
-      const panelY = layout.panelTop;
-      const panelWidth = layout.stateColumnWidth;
-      const panelHeight = 200;
-      const labelPadding = 8;
+    /* Top panel: hovered field explanation, else the live phase processing. */
+    renderTopPanel(ctx, layout) {
+      const x = layout.topPanelX;
+      const y = layout.topPanelY;
+      const w = layout.topPanelWidth;
+      const h = layout.topPanelHeight;
 
       ctx.save();
-      draw.roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, 8);
-      ctx.fillStyle = colors.panel;
+      draw.roundedRect(ctx, x, y, w, h, 8);
+      ctx.fillStyle = "#0e1420";
       ctx.fill();
-      ctx.strokeStyle = colors.nodeStroke;
+      ctx.strokeStyle = this.hoveredFieldKey || this.selectedFieldKey ? colors.nodeActive : colors.grid;
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, "現在の状態 S_n", panelX + panelWidth / 2, panelY + 14,
-        colors.accent, "bold 11px ui-monospace, monospace");
-      const state = this.currentState;
-      const fields = [
-        ["slot", `${state.slot}`],
-        ["latestBlockHash", state.latestBlockHashHex],
-        ["latestJustified", `slot ${state.latestJustifiedSlot}`],
-        ["latestFinalized", `slot ${state.latestFinalizedSlot}`],
-        ["totalActiveStake", `${state.totalActiveStake} ETH`],
-      ];
-      if (state.justifiedWeight > 0) {
-        const percentage = (state.justifiedWeight / state.totalActiveStake * 100).toFixed(1);
-        fields.push(["justifiedWeight", `${state.justifiedWeight} ETH (${percentage}%)`]);
+
+      if (this.hoveredFieldKey || this.selectedFieldKey) {
+        P2P.stateAnatomy.renderFieldExplanation(ctx, this, x, y, w, h);
+        return;
+      }
+      this.renderPhaseLog(ctx, x, y, w, h);
+      if (this.finalVerdict !== "pending") this.renderVerdictBadge(ctx, x, y, w, h);
+    },
+
+    renderPhaseLog(ctx, x, y, w, h) {
+      const phaseLabel = PHASE_LABELS[this.currentPhaseIndex];
+      draw.label(ctx, `フェーズ ${phaseLabel.number}: ${phaseLabel.title}`,
+        x + w / 2, y + 16, colors.text, "bold 12px ui-monospace, monospace");
+
+      const completedSteps = this.phaseSteps.slice(0, this.currentStepIndex);
+      const stepsInCurrentPhase = completedSteps.filter((s) => s.phase === this.currentPhaseIndex);
+      const showWeightBar = this.currentPhaseIndex === 2 && this.finalVerdict === "pending";
+      const reserveBottom = showWeightBar ? 48 : 14;
+      const maxVisible = Math.max(2, Math.floor((h - 38 - reserveBottom) / 20));
+      const visibleSteps = stepsInCurrentPhase.slice(-maxVisible);
+
+      let stepY = y + 38;
+      for (const step of visibleSteps) {
+        const stepColor = step.kind === "phase-result"
+          ? (step.result === "pass" ? colors.nodeHasMessage : step.result === "fail" ? colors.nodeTarget : colors.textDim)
+          : step.kind === "attestation"
+            ? (this.attestations[step.attestationIndex] &&
+              this.attestations[step.attestationIndex].status === "counted"
+              ? colors.nodeHasMessage : colors.nodeTarget)
+            : step.kind === "header-check"
+              ? (step.passed ? colors.nodeHasMessage : colors.nodeTarget)
+              : colors.text;
+        const displayText = this.truncateToWidth(ctx, step.description, w - 24, "11px ui-monospace, monospace");
+        draw.label(ctx, displayText, x + 12, stepY, stepColor, "11px ui-monospace, monospace", "left");
+        stepY += 20;
       }
 
-      let fieldY = panelY + 34;
-      for (const [fieldName, fieldValue] of fields) {
-        const slotChanged = fieldName === "slot" && state.slot !== this.stateSnapshot.slot;
-        const weightChanged = fieldName === "justifiedWeight" && state.justifiedWeight > 0;
-        const labelColor = (slotChanged || weightChanged) ? colors.nodeSource : colors.textDim;
-        const valueColor = (slotChanged || weightChanged) ? colors.text : colors.textDim;
-
-        draw.label(ctx, fieldName + ":", panelX + labelPadding, fieldY, labelColor, "10px ui-monospace, monospace", "left");
-        draw.label(ctx, fieldValue, panelX + panelWidth - labelPadding, fieldY, valueColor, "10px ui-monospace, monospace", "right");
-        fieldY += 18;
+      if (showWeightBar) {
+        this.renderWeightBar(ctx, x, y + h - 40, w);
+      }
+      if (this.autoPlay && this.finalVerdict === "pending" && stepsInCurrentPhase.length === 0) {
+        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+        ctx.save();
+        ctx.globalAlpha = 0.4 + pulse * 0.4;
+        draw.label(ctx, "実行待機中…", x + w / 2, y + 46, colors.textDim, "11px ui-monospace, monospace");
+        ctx.restore();
       }
     },
 
-    /* Block anatomy panel (right side) */
-    renderBlockPanel(ctx, layout) {
-      const panelX = layout.blockColumnX;
-      const panelWidth = layout.blockColumnWidth;
-      const panelY = layout.panelTop;
-      const headerHeight = 130;
-      const labelPadding = 8;
-
-      /* Header box (fixed size) */
-      ctx.save();
-      draw.roundedRect(ctx, panelX, panelY, panelWidth, headerHeight, 8);
-      ctx.fillStyle = colors.panel;
-      ctx.fill();
-      ctx.strokeStyle = colors.nodeStroke;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-
-      draw.label(ctx, "Block.Header (固定サイズ)", panelX + panelWidth / 2, panelY + 12,
-        colors.accent, "bold 11px ui-monospace, monospace");
-      const block = this.blockData;
-      const headerFields = [
-        ["slot", `${block.slot}`],
-        ["proposer_index", `${block.proposerIndex}${!this.scenario.proposerValid ? " ← 不正" : ""}`],
-        ["parent_root", `${block.parentRoot}${!this.scenario.parentRootValid ? " ← 不一致" : ""}`],
-        ["state_root", `${block.stateRoot}${!this.scenario.stateRootValid ? " ← 不一致" : ""}`],
-        ["body_root", `${block.bodyRoot}`],
-      ];
-
-      let headerFieldY = panelY + 28;
-      for (const [fieldName, fieldValue] of headerFields) {
-        const isInvalid = (fieldName === "proposer_index" && !this.scenario.proposerValid) ||
-          (fieldName === "parent_root" && !this.scenario.parentRootValid) ||
-          (fieldName === "state_root" && !this.scenario.stateRootValid);
-        const labelColor = isInvalid ? colors.nodeTarget : colors.textDim;
-        const valueColor = isInvalid ? colors.nodeTarget : colors.text;
-
-        draw.label(ctx, fieldName + ":", panelX + labelPadding, headerFieldY, labelColor, "10px ui-monospace, monospace", "left");
-        draw.label(ctx, fieldValue, panelX + panelWidth - labelPadding, headerFieldY, valueColor, "10px ui-monospace, monospace", "right");
-        headerFieldY += 18;
-      }
-      /* Body box (variable) */
-      const bodyY = panelY + headerHeight + 8;
-      const attestationRowHeight = 20;
-      const bodyHeight = 28 + this.attestations.length * attestationRowHeight;
-      ctx.save();
-      draw.roundedRect(ctx, panelX, bodyY, panelWidth, bodyHeight, 8);
-      ctx.fillStyle = colors.panel;
-      ctx.fill();
-      ctx.strokeStyle = colors.ihave + "99";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-      draw.label(ctx, "Block.Body (可変サイズ)", panelX + panelWidth / 2, bodyY + 12,
-        colors.ihave, "bold 11px ui-monospace, monospace");
-      let attestationY = bodyY + 28;
-      for (const attestation of this.attestations) {
-        const statusColor = attestation.status === "counted" ? colors.nodeHasMessage
-          : attestation.status === "ignored" ? colors.nodeTarget
-          : colors.textDim;
-        const attestationText = `att[${attestation.index}] src:${attestation.sourceSlot} tgt:${attestation.targetSlot} w:${attestation.validatorWeight}`;
-        const statusText = attestation.status === "counted" ? " ✓"
-          : attestation.status === "ignored" ? " ✗"
-          : "";
-
-        draw.label(ctx, attestationText + statusText, panelX + labelPadding, attestationY,
-          statusColor, "9px ui-monospace, monospace", "left");
-        attestationY += attestationRowHeight;
-      }
-    },
-
-    /* Truncate text with an ellipsis so it fits within maxWidth pixels. */
     truncateToWidth(ctx, text, maxWidth, font) {
       ctx.save();
       ctx.font = font;
@@ -591,68 +510,6 @@
       return truncated + "…";
     },
 
-    /* Current phase detail / animation area (center) */
-    renderPhaseDetail(ctx, layout) {
-      const detailX = layout.detailColumnX;
-      const detailWidth = layout.detailColumnWidth;
-      const detailY = layout.panelTop;
-      const detailHeight = 260;
-
-      ctx.save();
-      draw.roundedRect(ctx, detailX, detailY, detailWidth, detailHeight, 8);
-      ctx.fillStyle = "#0e1420";
-      ctx.fill();
-      ctx.strokeStyle = colors.grid;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.restore();
-      const centerX = detailX + detailWidth / 2;
-      const phaseLabel = PHASE_LABELS[this.currentPhaseIndex];
-      draw.label(ctx, `フェーズ ${phaseLabel.number}: ${phaseLabel.title}`,
-        centerX, detailY + 18, colors.text, "bold 12px ui-monospace, monospace");
-      /* Show completed steps */
-      const completedSteps = this.phaseSteps.slice(0, this.currentStepIndex);
-      const stepsInCurrentPhase = completedSteps.filter(s => s.phase === this.currentPhaseIndex);
-
-      let stepY = detailY + 40;
-      const maxVisibleSteps = 9;
-      const visibleSteps = stepsInCurrentPhase.slice(-maxVisibleSteps);
-
-      for (const step of visibleSteps) {
-        const stepColor = step.kind === "phase-result"
-          ? (step.result === "pass" ? colors.nodeHasMessage : step.result === "fail" ? colors.nodeTarget : colors.textDim)
-          : step.kind === "attestation"
-            ? (step.attestationIndex < this.attestations.length &&
-              this.attestations[step.attestationIndex].status === "counted"
-              ? colors.nodeHasMessage
-              : colors.nodeTarget)
-            : step.kind === "header-check"
-              ? (step.passed ? colors.nodeHasMessage : colors.nodeTarget)
-              : colors.text;
-
-        const displayText = this.truncateToWidth(
-          ctx, step.description, detailWidth - 20, "10px ui-monospace, monospace");
-        draw.label(ctx, displayText, detailX + 10, stepY, stepColor,
-          "10px ui-monospace, monospace", "left");
-        stepY += 22;
-      }
-
-      /* Weight bar for phase 3 */
-      if (this.currentPhaseIndex === 2) {
-        this.renderWeightBar(ctx, detailX, detailY + detailHeight - 60, detailWidth);
-      }
-
-      /* Pulsing "pending" indicator when autoPlay is on */
-      if (this.autoPlay && this.finalVerdict === "pending" && stepsInCurrentPhase.length === 0) {
-        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
-        ctx.save();
-        ctx.globalAlpha = 0.4 + pulse * 0.4;
-        draw.label(ctx, "実行待機中…", centerX, detailY + 60, colors.textDim,
-          "11px ui-monospace, monospace");
-        ctx.restore();
-      }
-    },
-
     /* Attestation weight bar in phase 3 */
     renderWeightBar(ctx, originX, originY, containerWidth) {
       const barX = originX + 12;
@@ -661,11 +518,10 @@
 
       const totalActiveStake = this.currentState.totalActiveStake;
       const justifiedWeight = this.currentState.justifiedWeight || 0;
-      const superMajorityThreshold = Math.ceil(totalActiveStake * 2 / 3);
+      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
       const fillFraction = Math.min(1, justifiedWeight / totalActiveStake);
       const thresholdFraction = superMajorityThreshold / totalActiveStake;
 
-      /* Background bar, then the filled portion */
       ctx.save();
       draw.roundedRect(ctx, barX, originY, barWidth, barHeight, 4);
       ctx.fillStyle = colors.grid;
@@ -675,75 +531,73 @@
         ctx.fillStyle = fillFraction >= thresholdFraction ? colors.nodeHasMessage : colors.nodeActive;
         ctx.fill();
       }
-      /* 2/3 threshold marker */
       const thresholdX = barX + barWidth * thresholdFraction;
       ctx.restore();
-      draw.line(ctx, thresholdX, originY - 4, thresholdX, originY + barHeight + 4,
-        colors.nodeSource, 1.5, true);
-      draw.label(ctx, "2/3", thresholdX, originY - 12, colors.nodeSource,
-        "9px ui-monospace, monospace");
-      const percentage = (justifiedWeight / totalActiveStake * 100).toFixed(1);
+      draw.line(ctx, thresholdX, originY - 4, thresholdX, originY + barHeight + 4, colors.nodeSource, 1.5, true);
+      draw.label(ctx, "2/3", thresholdX, originY - 12, colors.nodeSource, "9px ui-monospace, monospace");
+      const percentage = ((justifiedWeight / totalActiveStake) * 100).toFixed(1);
       draw.label(ctx, `有効投票: ${justifiedWeight} / ${totalActiveStake} ETH (${percentage}%)`,
-        originX + containerWidth / 2, originY + barHeight + 14, colors.text,
-        "10px ui-monospace, monospace");
+        originX + containerWidth / 2, originY + barHeight + 14, colors.text, "10px ui-monospace, monospace");
     },
 
-    /* Final verdict overlay */
-    renderVerdict(ctx) {
-      if (this.finalVerdict === "pending") return;
+    /* Final verdict badge, anchored to the bottom-right of the top panel */
+    renderVerdictBadge(ctx, panelX, panelY, panelWidth, panelHeight) {
       const isAccepted = this.finalVerdict === "accept";
       const verdictText = isAccepted ? "✓ ブロック受理" : "✗ ブロック却下";
       const verdictColor = isAccepted ? colors.nodeHasMessage : colors.nodeTarget;
-      const verdictBg = isAccepted ? "#0d2e1a" : "#2e0d0d";
-      const boxWidth = 240;
-      const boxHeight = 44;
-      const boxX = (this.width - boxWidth) / 2;
-      const boxY = this.height - 80;
+      const boxWidth = 220;
+      const boxHeight = 34;
+      const boxX = panelX + panelWidth - boxWidth - 14;
+      const boxY = panelY + panelHeight - boxHeight - 12;
       ctx.save();
       draw.roundedRect(ctx, boxX, boxY, boxWidth, boxHeight, 10);
-      ctx.fillStyle = verdictBg;
+      ctx.fillStyle = isAccepted ? "#0d2e1a" : "#2e0d0d";
       ctx.fill();
       ctx.strokeStyle = verdictColor;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, verdictText, this.width / 2, boxY + boxHeight / 2,
-        verdictColor, "bold 16px ui-monospace, monospace");
+      draw.label(ctx, verdictText, boxX + boxWidth / 2, boxY + boxHeight / 2, verdictColor,
+        "bold 15px ui-monospace, monospace");
     },
 
-    /* Mouse handling                                                    */
+    /* Mouse handling — field hover/select over the anatomy panels */
     onMouse(type, mouseX, mouseY) {
-      // Hover detection over attestation rows in block body panel
-      const layout = this.computeLayout();
-      const panelX = layout.blockColumnX;
-      const panelWidth = layout.blockColumnWidth;
-      const bodyY = layout.panelTop + 130 + 8;
-      const attestationRowHeight = 20;
-      const attestationStartY = bodyY + 28;
-
-      let hoveredIndex = -1;
-      for (let attestationIndex = 0; attestationIndex < this.attestations.length; attestationIndex++) {
-        const rowTop = attestationStartY + attestationIndex * attestationRowHeight - 8;
-        if (mouseX >= panelX && mouseX <= panelX + panelWidth &&
-          mouseY >= rowTop && mouseY <= rowTop + attestationRowHeight) {
-          hoveredIndex = attestationIndex;
+      let foundKey = null;
+      for (const hitBox of this.fieldHitBoxes) {
+        if (mouseX >= hitBox.x && mouseX <= hitBox.x + hitBox.width &&
+          mouseY >= hitBox.y && mouseY <= hitBox.y + hitBox.height) {
+          foundKey = hitBox.key;
           break;
         }
       }
-      this.hoveredAttestationIndex = hoveredIndex;
+      if (type === "move") {
+        this.hoveredFieldKey = foundKey;
+      } else if (type === "click") {
+        this.selectedFieldKey = foundKey === this.selectedFieldKey ? null : foundKey;
+      }
     },
 
     /* Stats                                                             */
     getStats() {
+      const activeKey = this.hoveredFieldKey || this.selectedFieldKey;
+      if (activeKey) {
+        const meta = P2P.stateAnatomy.FIELD_CATALOG[activeKey];
+        return [
+          { label: "選択フィールド", value: meta.label },
+          { label: "区分", value: meta.category },
+          { label: "サイズ", value: meta.fixedSize ? "□ 固定" : "◇ 可変" },
+          { label: "現在フェーズ", value: `${PHASE_LABELS[this.currentPhaseIndex].number}. ${PHASE_LABELS[this.currentPhaseIndex].title}` },
+        ];
+      }
       const justifiedWeight = this.currentState.justifiedWeight || 0;
       const totalActiveStake = this.currentState.totalActiveStake;
-      const percentage = (justifiedWeight / totalActiveStake * 100).toFixed(1);
-      const superMajorityThreshold = Math.ceil(totalActiveStake * 2 / 3);
-      const vsThreshold = `${percentage}% / ${(superMajorityThreshold / totalActiveStake * 100).toFixed(0)}%`;
+      const percentage = ((justifiedWeight / totalActiveStake) * 100).toFixed(1);
+      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
+      const vsThreshold = `${percentage}% / ${((superMajorityThreshold / totalActiveStake) * 100).toFixed(0)}%`;
       const phaseLabel = PHASE_LABELS[this.currentPhaseIndex];
       const verdictLabel = this.finalVerdict === "accept" ? "受理 ✓"
-        : this.finalVerdict === "reject" ? "却下 ✗"
-        : "進行中";
+        : this.finalVerdict === "reject" ? "却下 ✗" : "進行中";
       return [
         { label: "現在フェーズ", value: `${phaseLabel.number}. ${phaseLabel.title}` },
         { label: "state.slot", value: `${this.currentState.slot}` },
@@ -760,7 +614,6 @@
       const ui = P2P.ui;
       const sceneRef = this;
 
-      /* Playback group */
       const playbackGroup = ui.group("再生");
       playbackGroup.appendChild(ui.button("次のフェーズ ▶", () => {
         sceneRef.autoPlay = false;
@@ -780,7 +633,6 @@
       );
       container.appendChild(playbackGroup);
 
-      /* Scenario group */
       const scenarioGroup = ui.group("シナリオ (故障注入)");
       const scenarioSelect = document.createElement("select");
       scenarioSelect.style.cssText =
@@ -805,6 +657,18 @@
         })
       );
       container.appendChild(scenarioGroup);
+
+      const exploreGroup = ui.group("構造を見る");
+      const infoText = document.createElement("div");
+      infoText.style.cssText = "color:#8da2bd;font-size:11px;line-height:1.5;padding:2px 0 6px;";
+      infoText.textContent =
+        "状態/ブロックのフィールドにホバーで解説を中央に表示。クリックで固定。各フェーズが触るフィールドは橙色でハイライトされます。";
+      exploreGroup.appendChild(infoText);
+      exploreGroup.appendChild(ui.button("選択をクリア", () => {
+        sceneRef.selectedFieldKey = null;
+        sceneRef.hoveredFieldKey = null;
+      }));
+      container.appendChild(exploreGroup);
     },
   };
 
