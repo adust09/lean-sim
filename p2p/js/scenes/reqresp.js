@@ -151,7 +151,6 @@
       const requesterX = this.width * 0.26;
       const responderX = this.width * 0.74;
       const top = 54;
-      const unit = 30;
       const bottomLimit = this.height - 200;
 
       // Lifelines.
@@ -160,9 +159,17 @@
       draw.label(ctx, "Requester", requesterX, top - 16, colors.nodeSource, "bold 13px ui-monospace, monospace");
       draw.label(ctx, "Responder", responderX, top - 16, colors.accent, "bold 13px ui-monospace, monospace");
 
+      // Even, chronological rows decoupled from the animation clock, so closely
+      // timed events never share a y. Row height shrinks to fit a short panel.
+      const rowHeight = Math.min(34, (bottomLimit - top) / Math.max(this.messages.length, 1));
+      const rowY = (index) => top + (index + 0.5) * rowHeight;
+      // Lift arrow labels above their line, but never so far they reach the row
+      // above — keep a >=13px gap to the previous row even on a short panel.
+      const labelLift = Math.max(0, Math.min(9, rowHeight - 13));
+
       let halfClosed = false;
-      for (const message of this.messages) {
-        const y = top + Math.min(message.t, (bottomLimit - top) / unit) * unit;
+      this.messages.forEach((message, index) => {
+        const y = rowY(index);
         if (message.kind === "note") {
           if (this.clock >= message.t) {
             draw.label(ctx, message.label, this.width / 2, y, colors.textDim, "11px ui-monospace, monospace");
@@ -186,7 +193,7 @@
           }
         } else {
           // Animated arrow (msg / chunk).
-          if (this.clock < message.t) continue;
+          if (this.clock < message.t) return;
           const fromX = message.dir === 1 ? requesterX : responderX;
           const toX = message.dir === 1 ? responderX : requesterX;
           const fraction = util.clamp(this.clock - message.t, 0, 1);
@@ -195,10 +202,10 @@
           draw.arrow(ctx, fromX, y, x, y, color, 1.8);
           if (fraction > 0.2) {
             const labelX = (fromX + toX) / 2;
-            draw.label(ctx, message.label, labelX, y - 9, colors.text, "11px ui-monospace, monospace");
+            draw.label(ctx, message.label, labelX, y - labelLift, colors.text, "11px ui-monospace, monospace");
           }
         }
-      }
+      });
       if (halfClosed && this.clock < CHUNK_START) {
         draw.label(ctx, "状態: half-closed (応答待ち)", this.width / 2, bottomLimit + 4, colors.iwant, "11px ui-monospace, monospace");
       }
