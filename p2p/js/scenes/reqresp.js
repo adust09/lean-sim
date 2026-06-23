@@ -90,7 +90,7 @@
       // Sequence-diagram messages on a shared time axis (one-way trip = 1 unit).
       const messages = [
         { t: 0, dir: 1, kind: "msg", label: `Status (fork=${FORK_DIGEST}, head=${LOCAL_HEAD})` },
-        { t: 0, dir: -1, kind: "msg", label: `Status (fork=${FORK_DIGEST}, head=${remoteHead})` },
+        { t: 0.6, dir: -1, kind: "msg", label: `Status (fork=${FORK_DIGEST}, head=${remoteHead})` },
         { t: 1.1, kind: "note", label: `Fork Digest 一致 ✓ — head ${remoteHead} > ${LOCAL_HEAD}` },
         { t: 1.5, dir: 1, kind: "msg", label: "Open stream + protocol 交渉" },
         { t: 2.1, dir: 1, kind: "msg", label: `Request: BeaconBlocksByRange [${firstSlot}..${remoteHead}]` },
