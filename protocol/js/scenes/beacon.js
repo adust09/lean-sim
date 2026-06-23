@@ -664,7 +664,8 @@
         draw.label(ctx, "▶ GHOST head", hx, hy - 22, colors.nodeHasMessage, "9px ui-monospace, monospace");
       }
 
-      this.renderWeightBar(ctx, this.width - 366, this.height - 92);
+      // Voting gauge sits in the right column, directly under the aggregate panel.
+      this.renderWeightBar(ctx, this.netRight() + 20, this.netTop() + 396);
     },
 
     renderWeightBar(ctx, x, y) {
