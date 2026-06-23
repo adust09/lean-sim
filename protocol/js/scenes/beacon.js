@@ -52,9 +52,12 @@
         <li><b>受理 (I4):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
       </ol>
       <p><b>2つの軸:</b> I0–I4 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
-      <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
-      <p><b>深いリオルグ (秘匿枝の後出し):</b> 結託した多数派(群0 ≈60%)が slot3 で<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1 ≈40%)に公開チェーンを伸ばさせたまま、裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。slot7 で秘匿枝を<b>後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
-      <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
+      <p><b>フォーク (§6.3) — パラメータで再現:</b> 下のトグルと参加率を切り替えるとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。
+      <b>参加率 &lt; 67%</b> = 2/3 未達で <b>finality 停止</b>(ブロックは生成され続ける)。
+      <b>二重提案 (equivocation)</b> = 提案者が2ブロックを出し票が割れ、軽い枝は reorg(ON→OFF の一瞬で「一時的フォーク」)。
+      <b>ネットワーク分断</b> = 各群が別枝を伸ばし、どちらも 2/3 未達で停止、OFF(回復)で重い枝が勝つ。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
+      <p><b>深いリオルグ (秘匿枝の後出し) — トグル「秘匿枝」:</b> ON にすると結託した多数派(群0)が<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1)に公開チェーンを伸ばさせたまま裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。数スロット貯めてから<b>OFF にして後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
+      <p><b>操作:</b> フォーク・パラメータ(トグル)/ 参加率 / 検証者数 / 多数派比率 / 速度を変更可。「1スロット進める」で1歩ずつ。</p>
       <p><b>色凡例:</b><br>
       <span style="color:#36d399">●</span> 提案ブロック伝播 / accepted / finalized &nbsp;
       <span style="color:#a78bfa">●</span> attestation→aggregator &nbsp;
@@ -73,8 +76,11 @@
     validators: [],
     mesh: [],
     fork: null,
-    scenario: "normal",
-    scenarioButtons: [],
+    // Fork phenomena are driven by parameters/toggles, not preset scenarios.
+    equivocateOn: false,   // proposer publishes two competing blocks each slot
+    partitionOn: false,    // network split into two groups building separate branches
+    withholdOn: false,     // attacker majority withholds a private branch (reveal on off)
+    majorityFraction: 0.6, // size of group 0 (the larger group used by partition/withhold)
     particles: [],
     attestationDots: [],
     aggregateParticles: [],
@@ -117,7 +123,7 @@
     },
 
     build() {
-      this.rng = util.makeRng(this.seed * 7919 + this.validatorCount + this.scenario.length);
+      this.rng = util.makeRng(this.seed * 7919 + this.validatorCount);
       this.particles = [];
       this.attestationDots = [];
       this.aggregateParticles = [];
@@ -144,6 +150,10 @@
       this.acceptedThisSlot = false;
       this.buildValidators();
       this.fork = P2P.createForkModel(this.validatorCount);
+      // Re-apply the active fork toggles onto the fresh model.
+      this.fork.equivocate = this.equivocateOn;
+      if (this.partitionOn) this.fork.setPartition(true);
+      if (this.withholdOn) this.fork.startWithhold();
     },
 
     buildValidators() {
@@ -167,7 +177,7 @@
         nodes.push({ index: nodes.length, nx: 0.1 + this.rng() * 0.42, ny: 0.12 + this.rng() * 0.72, online: true, hasBlock: false, voteState: "none", group: 0 });
       }
       // The larger group (≈60%) is group 0, the rest group 1 (used by partition).
-      const majoritySize = Math.round(count * 0.6);
+      const majoritySize = Math.round(count * this.majorityFraction);
       nodes.forEach((node, index) => (node.group = index < majoritySize ? 0 : 1));
       this.validators = nodes;
       this.mesh = nodes.map(() => new Set());
@@ -203,7 +213,7 @@
     /* ------------------------- per-slot events ------------------------- */
     proposeBlock() {
       this.proposedThisSlot = true;
-      const proposed = this.fork.proposeSlot(this.scenario, this.currentSlot);
+      const proposed = this.fork.proposeSlot(this.currentSlot);
       this.lastProcessedBlock = proposed[0].block;
       // I0 also processes the new block: Υ applies the aggregates it carries.
       this.processStateTransition(proposed[0].block);
@@ -266,7 +276,7 @@
       this.voters = voters;
       this.expectedVotes = voters.length;
       for (const voter of voters) {
-        voter.voteTarget = this.fork.voteTargetFor(voter.group, this.scenario);
+        voter.voteTarget = this.fork.voteTargetFor(voter.group);
         // I1 voting: staggered, but the last dot lands exactly at interval 1's end.
         this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: INTERVAL_DURATION * (0.6 + 0.4 * this.rng()) });
       }
@@ -344,7 +354,6 @@
       this.headMoveTo = null;
       this.headMoveProgress = 1;
       this.votesAccrued = 0;
-      this.fork.applyScenarioTransitions(this.scenario, this.currentSlot);
     },
 
     /* ------------------------- update ------------------------- */
@@ -649,7 +658,7 @@
 
     /** The bottom area: the fork tree (§6.3 / GHOST) plus the per-slot weight bar. */
     renderChain(ctx) {
-      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${P2P.forkScenarios[this.scenario].label}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
+      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${this.modeLabel()}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
       // The vote gauge moved up into the right column, so the bottom row is free:
       // extend the tree to full width — unless a short canvas drops the chain
       // level with the right-column panels, in which case stop before them.
@@ -711,6 +720,16 @@
 
     onMouse() {},
 
+    /** A live description of the active fork parameters (replaces named scenarios). */
+    modeLabel() {
+      const active = [];
+      if (this.fork.partitioned) active.push("分断");
+      if (this.equivocateOn) active.push("二重提案");
+      if (this.fork.attacking) active.push("秘匿構築中");
+      if (this.participation < 2 / 3) active.push("低参加(確定停止)");
+      return active.length ? active.join(" + ") : "正常";
+    },
+
     /* ------------------------- stats ------------------------- */
     getStats() {
       const phase = ["提案/受理", "投票 (pending)", "集約", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
@@ -719,7 +738,7 @@
       const state = this.fork.partitioned ? "分断中" : this.fork.attacking ? "秘匿構築中" : this.fork.competing ? "フォーク中" : "単一";
       return [
         { label: "スロット / I", value: `${this.currentSlot} / I${this.interval} ${phase}` },
-        { label: "シナリオ / 状態", value: `${P2P.forkScenarios[this.scenario].label} (${state})` },
+        { label: "モード / 状態", value: `${this.modeLabel()} (${state})` },
         { label: "検証者数 / 参加率", value: `${this.validatorCount} (online ${this.onlineCount()}) / ${Math.round(this.participation * 100)}%` },
         { label: "正規ヘッド (GHOST)", value: this.fork.headBlock.slot === 0 ? "genesis" : `slot ${this.fork.headBlock.slot}` },
         { label: "枝の重み (上位)", value: branchWeights.slice(0, 2).join(" / ") || "0" },
@@ -732,10 +751,6 @@
     },
 
     /* ------------------------- controls ------------------------- */
-    updateScenarioButtons() {
-      this.scenarioButtons.forEach((b) => b.classList.toggle("primary", b.dataset.value === this.scenario));
-    },
-
     buildControls(container) {
       const ui = P2P.ui;
       const playback = ui.group("再生");
@@ -749,26 +764,30 @@
       playback.appendChild(ui.slider("再生速度 x", 0.25, 3, 0.25, this.speed, (v) => (this.speed = v)));
       container.appendChild(playback);
 
-      const scenarioGroup = ui.group("シナリオ (§6.3)");
-      this.scenarioButtons = [];
-      for (const key of Object.keys(P2P.forkScenarios)) {
-        const button = ui.button(P2P.forkScenarios[key].label, () => {
-          this.scenario = key;
-          this.build();
-          this.auto = true;
-          playButton.textContent = "⏸ 一時停止";
-          this.updateScenarioButtons();
-        });
-        button.dataset.value = key;
-        this.scenarioButtons.push(button);
-        scenarioGroup.appendChild(button);
-      }
-      container.appendChild(scenarioGroup);
-      this.updateScenarioButtons();
+      // Fork phenomena as live parameters/toggles (no preset scenarios).
+      const forkGroup = ui.group("フォーク・パラメータ (§6.3)");
+      const forkNote = document.createElement("div");
+      forkNote.style.cssText = "color:#8da2bd;font-size:11px;line-height:1.5;padding:2px 0 6px;";
+      forkNote.textContent = "トグルと参加率の組合せで各現象を再現: 参加率<67%=確定停止 / 二重提案=一時的フォーク / 分断=ネットワーク分断 / 秘匿=深いリオルグ(OFFで後出し公開)。";
+      forkGroup.appendChild(forkNote);
+      forkGroup.appendChild(ui.toggle("二重提案 (equivocation)", this.equivocateOn, (v) => {
+        this.equivocateOn = v;
+        this.fork.equivocate = v;
+      }));
+      forkGroup.appendChild(ui.toggle("ネットワーク分断", this.partitionOn, (v) => {
+        this.partitionOn = v;
+        this.fork.setPartition(v);
+      }));
+      forkGroup.appendChild(ui.toggle("秘匿枝の後出し (ON=構築 / OFF=公開)", this.withholdOn, (v) => {
+        this.withholdOn = v;
+        if (v) this.fork.startWithhold(); else this.fork.revealWithhold();
+      }));
+      container.appendChild(forkGroup);
 
       const params = ui.group("ネットワーク");
       params.appendChild(ui.slider("検証者数", 12, 40, 2, this.validatorCount, (value) => { this.validatorCount = value; this.build(); }));
       params.appendChild(ui.slider("参加率 %", 40, 100, 5, Math.round(this.participation * 100), (value) => { this.participation = value / 100; }));
+      params.appendChild(ui.slider("多数派グループ比率 %", 50, 80, 5, Math.round(this.majorityFraction * 100), (value) => { this.majorityFraction = value / 100; this.build(); }));
       container.appendChild(params);
     },
   };

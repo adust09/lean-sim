@@ -12,21 +12,9 @@
 (function registerForkModel() {
   const { util, draw, colors } = P2P;
 
-  const SCENARIOS = {
-    normal: { label: "正常 (フォークなし)" },
-    tempfork: { label: "一時的フォーク" },
-    partition: { label: "ネットワーク分断 (60/40)" },
-    equivocation: { label: "二重提案 (equivocation)" },
-    deepreorg: { label: "深いリオルグ (秘匿枝の後出し)" },
-  };
-
-  P2P.forkScenarios = SCENARIOS;
-
-  // deepreorg timeline: the colluding majority forks a private branch at slot 3,
-  // builds it withheld, and reveals it at slot 7 — orphaning every honest block
-  // since the fork point at once (a multi-block reorg bounded by finalization).
-  const DEEPREORG_FORK_SLOT = 3;
-  const DEEPREORG_REVEAL_SLOT = 7;
+  // The fork model is parameter-driven: the scene sets boolean flags
+  // (equivocate, partitioned, attacking) via toggles rather than picking a named
+  // scenario, so each fork phenomenon can be turned on/off live.
 
   /** Create a fork model seeded with a genesis block (justified + finalized). */
   P2P.createForkModel = function createForkModel(validatorCount) {
@@ -45,6 +33,7 @@
       canonical: new Set([genesis]),
       reorgCount: 0,
       reorgDepth: 0,
+      equivocate: false, // when true, each proposer publishes two competing blocks
       partitioned: false,
       attacking: false,
       publicTip: null,
@@ -138,18 +127,20 @@
         return this.blocks.filter((b) => b.children.length === 0);
       },
 
-      /* ------------------------- scenario engine (§6.3) ------------------------- */
+      /* ------------------------- fork engine (§6.3) ------------------------- */
       /** Create this slot's block(s). Returns [{block, group}]; sets competing for forks. */
-      proposeSlot(scenario, slot) {
+      proposeSlot(slot) {
         this.competing = null;
-        if (scenario === "partition" && this.partitioned) {
+        // Network partition: each group extends its own branch.
+        if (this.partitioned) {
           const a = this.createBlock(this.groupTip[0], 0, slot);
           const b = this.createBlock(this.groupTip[1], 1, slot);
           this.groupTip[0] = a;
           this.groupTip[1] = b;
           return [{ block: a, group: 0 }, { block: b, group: 1 }];
         }
-        if (scenario === "deepreorg" && this.attacking) {
+        // Withholding attack: honest minority builds in public, attacker majority hidden.
+        if (this.attacking) {
           const pub = this.createBlock(this.publicTip, 1, slot); // honest minority, public
           const hid = this.createBlock(this.hiddenTip, 0, slot); // attacker majority, withheld
           hid.hidden = true;
@@ -159,7 +150,8 @@
           return [{ block: pub, group: 1 }, { block: hid, group: 0 }];
         }
         const head = this.headBlock;
-        if ((scenario === "tempfork" || scenario === "equivocation") && slot === 3) {
+        // Equivocation: the proposer publishes two competing blocks on the same parent.
+        if (this.equivocate) {
           const a = this.createBlock(head, 0, slot);
           const b = this.createBlock(head, 1, slot);
           this.competing = [a, b];
@@ -169,36 +161,38 @@
       },
 
       /** Which block a validator of `group` votes for this slot. */
-      voteTargetFor(group, scenario) {
-        if (scenario === "partition" && this.partitioned) return this.groupTip[group];
+      voteTargetFor(group) {
+        if (this.partitioned) return this.groupTip[group];
         if (this.competing) return group === 0 ? this.competing[0] : this.competing[1];
         return this.headBlock;
       },
 
-      /** Partition the validator set at slot 2; heal at slot 7 (GHOST then resolves). */
-      applyScenarioTransitions(scenario, slot) {
-        if (scenario === "partition") {
-          if (slot === 2 && !this.partitioned) {
-            this.partitioned = true;
-            this.groupTip = { 0: this.headBlock, 1: this.headBlock };
-          } else if (slot === 7 && this.partitioned) {
-            this.partitioned = false;
-          }
-          return;
+      /** Toggle a network partition; on heal GHOST resolves to the heaviest branch. */
+      setPartition(on) {
+        if (on && !this.partitioned) {
+          this.partitioned = true;
+          this.groupTip = { 0: this.headBlock, 1: this.headBlock };
+        } else if (!on && this.partitioned) {
+          this.partitioned = false;
         }
-        if (scenario === "deepreorg") {
-          if (slot === DEEPREORG_FORK_SLOT && !this.attacking) {
-            this.attacking = true;
-            this.publicTip = this.headBlock;
-            this.hiddenTip = this.headBlock;
-          } else if (slot === DEEPREORG_REVEAL_SLOT && this.attacking) {
-            this.attacking = false;
-            const previousHead = this.headBlock;
-            for (const block of this.blocks) if (block.hidden) block.hidden = false; // reveal
-            this.recomputeHead();
-            this.detectReorg(previousHead); // the withheld branch now wins GHOST → deep reorg
-          }
-        }
+      },
+
+      /** Begin withholding: the attacker majority forks a private branch from head. */
+      startWithhold() {
+        if (this.attacking) return;
+        this.attacking = true;
+        this.publicTip = this.headBlock;
+        this.hiddenTip = this.headBlock;
+      },
+
+      /** Reveal the withheld branch; its banked votes now win GHOST → deep reorg. */
+      revealWithhold() {
+        if (!this.attacking) return;
+        this.attacking = false;
+        const previousHead = this.headBlock;
+        for (const block of this.blocks) if (block.hidden) block.hidden = false; // reveal
+        this.recomputeHead();
+        this.detectReorg(previousHead);
       },
 
       /* ------------------------- tree rendering ------------------------- */
