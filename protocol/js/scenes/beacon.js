@@ -3,7 +3,7 @@
  * now including fork scenarios (§6.3) on a fork TREE with LMD-GHOST.
  *
  * One screen tying every chapter together on the per-slot heartbeat:
- *   §3 Time      — the slot clock and its four intervals drive the cycle.
+ *   §3 Time      — the slot clock and its five intervals drive the cycle.
  *   §5 P2P       — a proposed block propagates across a validator mesh.
  *   §6 Consensus — validators attest (pending→accepted); votes aggregate;
  *                  a 2/3 supermajority justifies; GHOST picks the head; forks
@@ -19,16 +19,17 @@
 (function registerBeacon() {
   const { util, draw, colors, ease } = P2P;
 
-  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
-  const INTERVAL_COUNT = 4;
+  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (5 intervals of 2.4s)
+  const INTERVAL_COUNT = 5;   // INTERVALS_PER_SLOT (config.py)
   const BRANCH_COLOR = ["#2f6df6", "#f6a52f"]; // group 0 / group 1 during a fork
 
-  // The four-interval slot pipeline (spec §3.2.1 / Fig 3.2).
+  // The five-interval slot pipeline — action points per timeline.py tick_interval.
   const INTERVAL_NARRATION = [
-    "Interval 0 — Block Proposal: proposer が Υ を実行しブロックと state_root を生成・配信。各ノードが Υ を再実行し照合、前スロットの集約票で justification を確定 (§4.3)。",
-    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留。aggregator が並行して集約 (§6.4)。",
-    "Interval 2 — Safe Target Update: 票を数える前に、直近で 2/3 を集めたブロック (セーフターゲット) を確定し視点を安定化。",
-    "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (§6.3)。",
+    "Interval 0 — 提案着弾 / 前票受理: proposer がブロックと state_root を配信。各ノードが Υ(§4.3) を再実行し照合し、前スロットの保留集約票を受理して justification を確定 (accept_new_attestations)。",
+    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留(この区間は処理点なし=票がネットワークに伝搬する猶予)。",
+    "Interval 2 — 署名集約: aggregator が今スロットの票を1本の証明に束ねブロードキャスト (§6.4 aggregate)。",
+    "Interval 3 — Safe Target Update: 直近で 2/3 を集めたブロック (セーフターゲット) を確定し高速確定の視点を安定化 (update_safe_target)。",
+    "Interval 4 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (§6.3 accept_new_attestations)。",
   ];
 
   // Υ's 4-phase transition pipeline, run when a block is processed at I0 (§4.3).
@@ -39,14 +40,15 @@
     title: "ビーコンチェーン稼働",
     sectionRef: "2–6",
     descriptionHTML: `
-      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 4つのインターバル(§3)が毎スロットを駆動する:</p>
+      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 5つのインターバル(§3)が毎スロットを駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 (I0):</b> proposer がブロックを作り伝播 (§5)。同時に <b>状態遷移 Υ</b>(§4.3 の4フェーズ)を proposer が算出→各ノードが再実行し <code>state_root</code> 照合。前スロットの集約票をここで適用し justification 確定。</li>
-        <li><b>投票 (I1):</b> 検証者が attestation を配信。票は <b>pending</b>(保留)。aggregator が同一票を1本 <code>Sagg</code> に集約 (§6.4 / 右パネル)。</li>
-        <li><b>セーフターゲット (I2):</b> 直近で 2/3 を集めたブロックを確定し視点を安定化。</li>
-        <li><b>受理 (I3):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
+        <li><b>提案/受理 (I0):</b> proposer がブロックを作り伝播 (§5)。<b>状態遷移 Υ</b>(§4.3 の4フェーズ)を各ノードが再実行し <code>state_root</code> 照合。前スロットの保留集約票をここで受理し justification 確定 (accept_new_attestations)。</li>
+        <li><b>投票 (I1):</b> 検証者が attestation を配信。票は <b>pending</b>(保留)。処理点なし。</li>
+        <li><b>集約 (I2):</b> aggregator が同一票を1本 <code>Sagg</code> に集約 (§6.4 aggregate / 右パネル)。</li>
+        <li><b>セーフターゲット (I3):</b> 直近で 2/3 を集めたブロックを確定し視点を安定化 (update_safe_target)。</li>
+        <li><b>受理 (I4):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
       </ol>
-      <p><b>2つの軸:</b> I0–I3 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
+      <p><b>2つの軸:</b> I0–I4 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
       <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
       <p><b>深いリオルグ (秘匿枝の後出し):</b> 結託した多数派(群0 ≈60%)が slot3 で<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1 ≈40%)に公開チェーンを伸ばさせたまま、裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。slot7 で秘匿枝を<b>後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
       <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
@@ -91,6 +93,7 @@
     safeTargetSlot: 0,
     proposedThisSlot: false,
     attestedThisSlot: false,
+    aggregatedThisSlot: false,
     safeTargetThisSlot: false,
     acceptedThisSlot: false,
 
@@ -123,6 +126,7 @@
       this.safeTargetSlot = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.aggregatedThisSlot = false;
       this.safeTargetThisSlot = false;
       this.acceptedThisSlot = false;
       this.buildValidators();
@@ -235,13 +239,20 @@
       }
     },
 
-    /** I2 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
+    /** I2 — Signature Aggregation: aggregators bundle the slot's votes into one proof.
+     *  The visual folding into the aggregator runs continuously via attestation
+     *  particles; this marks the discrete interval-2 action point (timeline.py). */
+    aggregateVotes() {
+      this.aggregatedThisSlot = true;
+    },
+
+    /** I3 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
     updateSafeTarget() {
       this.safeTargetThisSlot = true;
       this.safeTargetSlot = this.fork.latestJustified.slot;
     },
 
-    /** I3 — Attestation Acceptance: votes apply to fork choice (GHOST head moves). */
+    /** I4 — Attestation Acceptance: votes apply to fork choice (GHOST head moves). */
     acceptAttestations() {
       this.acceptedThisSlot = true;
       const tally = new Map();
@@ -279,6 +290,7 @@
       this.interval = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.aggregatedThisSlot = false;
       this.safeTargetThisSlot = false;
       this.acceptedThisSlot = false;
       this.votesAccrued = 0;
@@ -300,8 +312,9 @@
       this.interval = Math.min(INTERVAL_COUNT - 1, Math.floor(this.slotTimer / (SLOT_DURATION / INTERVAL_COUNT)));
       if (this.interval >= 0 && !this.proposedThisSlot) this.proposeBlock();
       if (this.interval >= 1 && !this.attestedThisSlot) this.castAttestations();
-      if (this.interval >= 2 && !this.safeTargetThisSlot) this.updateSafeTarget();
-      if (this.interval >= 3 && !this.acceptedThisSlot) this.acceptAttestations();
+      if (this.interval >= 2 && !this.aggregatedThisSlot) this.aggregateVotes();
+      if (this.interval >= 3 && !this.safeTargetThisSlot) this.updateSafeTarget();
+      if (this.interval >= 4 && !this.acceptedThisSlot) this.acceptAttestations();
     },
 
     advanceParticles(dt) {
@@ -360,6 +373,7 @@
       if (!this.proposedThisSlot) this.proposeBlock();
       if (!this.attestedThisSlot) this.castAttestations();
       this.collectedSigs = this.expectedVotes || 0;
+      if (!this.aggregatedThisSlot) this.aggregateVotes();
       if (!this.safeTargetThisSlot) this.updateSafeTarget();
       if (!this.acceptedThisSlot) this.acceptAttestations();
       this.votesAccrued = this.headSlotVotes || 0;
@@ -384,7 +398,7 @@
       const right = this.width - 30;
       const segWidth = (right - left) / INTERVAL_COUNT;
       draw.label(ctx, `Slot ${this.currentSlot}`, left, top + 2, colors.nodeSource, "bold 15px ui-monospace, monospace", "left");
-      const labels = ["I0 提案", "I1 投票", "I2 セーフターゲット", "I3 受理"];
+      const labels = ["I0 提案/受理", "I1 投票", "I2 集約", "I3 safe", "I4 受理"];
       for (let i = 0; i < INTERVAL_COUNT; i++) {
         const x = left + i * segWidth;
         const active = i === this.interval;
@@ -605,7 +619,7 @@
 
     /* ------------------------- stats ------------------------- */
     getStats() {
-      const phase = ["提案", "投票 (pending)", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
+      const phase = ["提案/受理", "投票 (pending)", "集約", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
       const memo = new Map();
       const branchWeights = this.fork.tips().map((t) => this.fork.subtreeWeight(t, memo)).sort((a, b) => b - a);
       const state = this.fork.partitioned ? "分断中" : this.fork.attacking ? "秘匿構築中" : this.fork.competing ? "フォーク中" : "単一";
