@@ -27,15 +27,16 @@
   function hashPair(l, r) { return hashLabel(l + "|" + r); }
   const ZERO_HASH = hashLabel("zero");
 
-  // f(name, type, bytes, kind, value, elem) — kind: "fixed" | "variable" | "nested".
-  const f = (name, type, bytes, kind, value, elem) => ({ name, type, bytes, kind, value, elem });
+  // f(name, type, bytes, kind, value, elem, limit) — kind: "fixed" | "variable" | "nested".
+  // `limit` is a List/Bitlist capacity (max elements); it fixes the internal tree height.
+  const f = (name, type, bytes, kind, value, elem, limit) => ({ name, type, bytes, kind, value, elem, limit });
 
   const PRESETS = {
     validatorRecord: {
       label: "ValidatorRecord (PDF ssz/container.py 仮想)", group: "PDF 教材例",
       fields: [
         f("id", "uint16", 2, "fixed", "42"),
-        f("signatures", "List[Bytes4]", 4, "variable", "[…]", 4),
+        f("signatures", "List[Bytes4, 8]", 4, "variable", "[…]", 4, 8),
         f("pubkey", "Bytes48", 48, "fixed", "0xab12"),
       ],
     },
@@ -91,9 +92,39 @@
   function leafGindex(preset, position) { return leafCount(preset) + position; }
 
   function leafHash(field, listLength) {
-    if (field.kind === "variable") return hashLabel(field.name + ":list" + listLength);
+    // A List/Bitlist field's container leaf is its own hash_tree_root: the root of a
+    // capacity(LIMIT)-sized chunk subtree, with the length mixed in (mix_in_length).
+    if (field.kind === "variable") return buildListSubtree(field, listLength).htr;
     if (field.kind === "nested") return hashLabel(field.name + ":htr");
     return hashLabel(field.name + "=" + field.value);
+  }
+
+  /** Leaf capacity (next power of two of LIMIT) — fixes the list's internal tree height. */
+  function listLeafCapacity(field) { return Math.max(1, nextPow2(field.limit || 1)); }
+
+  /**
+   * Build a List/Bitlist field's internal merkle subtree (crypto/merkleization.py):
+   * the first `length` element chunks are real, the rest are zero subtrees, padded to
+   * the LIMIT-derived capacity (so the height is fixed by the capacity, not the length).
+   * The capacity-tree root is combined with the length via mix_in_length → the field's htr.
+   */
+  function buildListSubtree(field, listLength) {
+    const capacity = listLeafCapacity(field);
+    const depth = Math.round(Math.log2(capacity));
+    const length = Math.min(listLength, field.limit || listLength);
+    const h = {};
+    for (let i = 0; i < capacity; i++) {
+      h[capacity + i] = i < length ? hashLabel(field.name + "[" + i + "]") : ZERO_HASH;
+    }
+    for (let level = depth - 1; level >= 0; level--) {
+      for (let p = 0; p < Math.pow(2, level); p++) {
+        const g = Math.pow(2, level) + p;
+        h[g] = hashPair(h[2 * g], h[2 * g + 1]);
+      }
+    }
+    const chunkRoot = h[1];
+    const htr = hashPair(chunkRoot, "len=" + length); // mix_in_length(root, length)
+    return { hashes: h, depth, capacity, length, chunkRoot, htr };
   }
 
   /** Container merkleization: field roots as leaves (+ zero padding) → root g1. */
@@ -158,6 +189,8 @@
     leafGindex,
     leafHash,
     buildTree,
+    listLeafCapacity,
+    buildListSubtree,
     serializeLayout,
     proofPlan,
   };
