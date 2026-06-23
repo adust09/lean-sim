@@ -74,8 +74,9 @@
     sectionRef: "4.1–4.3",
     descriptionHTML: `
       <p><b>状態遷移関数 S<sub>n+1</sub> = Υ(S<sub>n</sub>, B)</b> を、状態とブロックの
-      <b>完全な構造（解剖）</b>の上で実行する統合ビューです。左が状態コンテナ、右がブロック、
-      中央が実行ログ。各フェーズは自分が読み書きするフィールドを<b>橙色でハイライト</b>します。</p>
+      <b>完全な構造（解剖）</b>の上で実行する統合ビューです。上部が各フェーズの処理（実行ログ）、
+      下部が状態コンテナ（左）とブロック（右）。各フェーズは自分が読み書きするフィールドを
+      <b>橙色でハイライト</b>します。</p>
       <p><b>① 時刻同期 (§4.3.1):</b> state.slot をブロックのスロットまで進める
       （chrono.slot / historical_block_hashes を更新）。</p>
       <p><b>② ヘッダ検証 (§4.3.2):</b> proposer_index・parent_root（state の
@@ -345,48 +346,39 @@
       this.fieldHitBoxes = [];
       const layout = this.computeLayout();
       this.renderPhaseTracker(ctx);
+      this.renderTopPanel(ctx, layout);
       P2P.stateAnatomy.renderStateContainer(
-        ctx, this, layout.stateColumnX, layout.panelTop, layout.stateColumnWidth, layout.containerHeight);
-      this.renderCenter(ctx, layout);
+        ctx, this, layout.stateColumnX, layout.bottomY, layout.stateColumnWidth, layout.bottomHeight);
       P2P.stateAnatomy.renderBlockContainer(
-        ctx, this, layout.blockColumnX, layout.panelTop, layout.blockColumnWidth, layout.containerHeight);
-      this.renderVerdict(ctx);
+        ctx, this, layout.blockColumnX, layout.bottomY, layout.blockColumnWidth, layout.bottomHeight);
     },
 
-    /* Three columns: state anatomy | center (log or field detail) | block. */
+    /*
+     * Vertical split: phase processing on top (tracker + execution log over the
+     * full width), the state container and block side-by-side underneath.
+     */
     computeLayout() {
       const outerMargin = 16;
       const columnGap = 14;
-      const panelTop = 56;
-      const usableWidth = this.width - outerMargin * 2 - columnGap * 2;
+      const topPanelY = 50;
+      const topPanelHeight = Math.max(150, Math.min(204, Math.floor(this.height * 0.30)));
+      const bottomY = topPanelY + topPanelHeight + 12;
+      const bottomHeight = Math.max(200, this.height - bottomY - 16);
 
-      const minimumTotal = 250 + 210 + 220;
-      let stateColumnWidth;
-      let blockColumnWidth;
-      let detailColumnWidth;
-      if (usableWidth >= minimumTotal) {
-        stateColumnWidth = Math.max(250, Math.floor(usableWidth * 0.34));
-        blockColumnWidth = Math.max(220, Math.floor(usableWidth * 0.30));
-        detailColumnWidth = usableWidth - stateColumnWidth - blockColumnWidth;
-      } else {
-        stateColumnWidth = Math.floor(usableWidth * 0.36);
-        blockColumnWidth = Math.floor(usableWidth * 0.30);
-        detailColumnWidth = usableWidth - stateColumnWidth - blockColumnWidth;
-      }
-
-      const stateColumnX = outerMargin;
-      const detailColumnX = stateColumnX + stateColumnWidth + columnGap;
-      const blockColumnX = detailColumnX + detailColumnWidth + columnGap;
-      const containerHeight = Math.max(240, this.height - panelTop - 72);
+      const usableWidth = this.width - outerMargin * 2;
+      const stateColumnWidth = Math.floor((usableWidth - columnGap) * 0.52);
+      const blockColumnWidth = usableWidth - columnGap - stateColumnWidth;
 
       return {
-        panelTop,
-        containerHeight,
-        stateColumnX,
+        topPanelX: outerMargin,
+        topPanelY,
+        topPanelWidth: usableWidth,
+        topPanelHeight,
+        bottomY,
+        bottomHeight,
+        stateColumnX: outerMargin,
         stateColumnWidth,
-        detailColumnX,
-        detailColumnWidth,
-        blockColumnX,
+        blockColumnX: outerMargin + stateColumnWidth + columnGap,
         blockColumnWidth,
       };
     },
@@ -439,12 +431,12 @@
       }
     },
 
-    /* Center column: hovered field explanation, else the live step log. */
-    renderCenter(ctx, layout) {
-      const x = layout.detailColumnX;
-      const y = layout.panelTop;
-      const w = layout.detailColumnWidth;
-      const h = layout.containerHeight;
+    /* Top panel: hovered field explanation, else the live phase processing. */
+    renderTopPanel(ctx, layout) {
+      const x = layout.topPanelX;
+      const y = layout.topPanelY;
+      const w = layout.topPanelWidth;
+      const h = layout.topPanelHeight;
 
       ctx.save();
       draw.roundedRect(ctx, x, y, w, h, 8);
@@ -457,22 +449,25 @@
 
       if (this.hoveredFieldKey || this.selectedFieldKey) {
         P2P.stateAnatomy.renderFieldExplanation(ctx, this, x, y, w, h);
-      } else {
-        this.renderPhaseLog(ctx, x, y, w, h);
+        return;
       }
+      this.renderPhaseLog(ctx, x, y, w, h);
+      if (this.finalVerdict !== "pending") this.renderVerdictBadge(ctx, x, y, w, h);
     },
 
     renderPhaseLog(ctx, x, y, w, h) {
-      const centerX = x + w / 2;
       const phaseLabel = PHASE_LABELS[this.currentPhaseIndex];
       draw.label(ctx, `フェーズ ${phaseLabel.number}: ${phaseLabel.title}`,
-        centerX, y + 18, colors.text, "bold 12px ui-monospace, monospace");
+        x + w / 2, y + 16, colors.text, "bold 12px ui-monospace, monospace");
 
       const completedSteps = this.phaseSteps.slice(0, this.currentStepIndex);
       const stepsInCurrentPhase = completedSteps.filter((s) => s.phase === this.currentPhaseIndex);
-      const visibleSteps = stepsInCurrentPhase.slice(-9);
+      const showWeightBar = this.currentPhaseIndex === 2 && this.finalVerdict === "pending";
+      const reserveBottom = showWeightBar ? 48 : 14;
+      const maxVisible = Math.max(2, Math.floor((h - 38 - reserveBottom) / 20));
+      const visibleSteps = stepsInCurrentPhase.slice(-maxVisible);
 
-      let stepY = y + 40;
+      let stepY = y + 38;
       for (const step of visibleSteps) {
         const stepColor = step.kind === "phase-result"
           ? (step.result === "pass" ? colors.nodeHasMessage : step.result === "fail" ? colors.nodeTarget : colors.textDim)
@@ -483,20 +478,19 @@
             : step.kind === "header-check"
               ? (step.passed ? colors.nodeHasMessage : colors.nodeTarget)
               : colors.text;
-        const displayText = this.truncateToWidth(ctx, step.description, w - 20, "10px ui-monospace, monospace");
-        draw.label(ctx, displayText, x + 10, stepY, stepColor, "10px ui-monospace, monospace", "left");
-        stepY += 22;
+        const displayText = this.truncateToWidth(ctx, step.description, w - 24, "11px ui-monospace, monospace");
+        draw.label(ctx, displayText, x + 12, stepY, stepColor, "11px ui-monospace, monospace", "left");
+        stepY += 20;
       }
 
-      if (this.currentPhaseIndex === 2) {
-        this.renderWeightBar(ctx, x, y + h - 56, w);
+      if (showWeightBar) {
+        this.renderWeightBar(ctx, x, y + h - 40, w);
       }
-
       if (this.autoPlay && this.finalVerdict === "pending" && stepsInCurrentPhase.length === 0) {
         const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 400);
         ctx.save();
         ctx.globalAlpha = 0.4 + pulse * 0.4;
-        draw.label(ctx, "実行待機中…", centerX, y + 60, colors.textDim, "11px ui-monospace, monospace");
+        draw.label(ctx, "実行待機中…", x + w / 2, y + 46, colors.textDim, "11px ui-monospace, monospace");
         ctx.restore();
       }
     },
@@ -546,16 +540,15 @@
         originX + containerWidth / 2, originY + barHeight + 14, colors.text, "10px ui-monospace, monospace");
     },
 
-    /* Final verdict overlay */
-    renderVerdict(ctx) {
-      if (this.finalVerdict === "pending") return;
+    /* Final verdict badge, anchored to the bottom-right of the top panel */
+    renderVerdictBadge(ctx, panelX, panelY, panelWidth, panelHeight) {
       const isAccepted = this.finalVerdict === "accept";
       const verdictText = isAccepted ? "✓ ブロック受理" : "✗ ブロック却下";
       const verdictColor = isAccepted ? colors.nodeHasMessage : colors.nodeTarget;
-      const boxWidth = 240;
-      const boxHeight = 40;
-      const boxX = (this.width - boxWidth) / 2;
-      const boxY = this.height - 56;
+      const boxWidth = 220;
+      const boxHeight = 34;
+      const boxX = panelX + panelWidth - boxWidth - 14;
+      const boxY = panelY + panelHeight - boxHeight - 12;
       ctx.save();
       draw.roundedRect(ctx, boxX, boxY, boxWidth, boxHeight, 10);
       ctx.fillStyle = isAccepted ? "#0d2e1a" : "#2e0d0d";
@@ -564,8 +557,8 @@
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, verdictText, this.width / 2, boxY + boxHeight / 2, verdictColor,
-        "bold 16px ui-monospace, monospace");
+      draw.label(ctx, verdictText, boxX + boxWidth / 2, boxY + boxHeight / 2, verdictColor,
+        "bold 15px ui-monospace, monospace");
     },
 
     /* Mouse handling — field hover/select over the anatomy panels */
