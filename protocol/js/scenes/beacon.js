@@ -247,7 +247,22 @@
       this.aggregatorIndex = (this.currentSlot * 13 + 7) % this.validatorCount;
       const head = this.fork.headBlock;
       this.attestTriple = { sourceSlot: this.fork.latestJustified.slot, targetSlot: head.slot };
-      const voters = this.validators.filter((v) => v.online && this.rng() < this.participation);
+      // Participation is a FIXED fraction of each group's online validators, not a
+      // per-validator coin flip. Re-rolling each slot let the vote count vary above
+      // the mean, so a 60% rate could randomly cross 2/3 and finalize. A fixed
+      // count per group keeps 60% of 40 at exactly 24 votes (< the 27 threshold) so
+      // sub-2/3 participation never finalizes. Membership is still shuffled per slot
+      // for visual variety; only the count is pinned.
+      const byGroup = { 0: [], 1: [] };
+      for (const validator of this.validators) {
+        if (validator.online) byGroup[validator.group].push(validator);
+      }
+      const voters = [];
+      for (const group of [0, 1]) {
+        const pool = util.shuffleInPlace(this.rng, [...byGroup[group]]);
+        const take = Math.round(this.participation * pool.length);
+        for (let k = 0; k < take; k++) voters.push(pool[k]);
+      }
       this.voters = voters;
       this.expectedVotes = voters.length;
       for (const voter of voters) {
