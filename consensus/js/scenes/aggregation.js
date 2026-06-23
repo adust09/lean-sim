@@ -1,13 +1,20 @@
 /*
- * aggregation.js — §6.4, §6.5.4: Signature aggregation and proposer set-cover packing.
+ * aggregation.js — Signature aggregation (post-quantum XMSS proofs).
+ * Reference: spec/forks/lstar/containers/aggregation.py
+ *            (SingleMessageAggregate, MultiMessageAggregate),
+ *            containers/block.py (SignedBlock.proof: MultiMessageAggregate).
  *
- * Part 1 (§6.4): Committee of N validators, each voting with identical AttestationData.
- * Individual XMSS signatures merge into one aggregate; a participation bitfield records
- * who voted (1) vs. was offline (0). Toggle validators on/off to see updates live.
+ * Part 1 — SingleMessageAggregate: a committee of N validators all sign the
+ * SAME message (one AttestationData). Their individual XMSS signatures fold
+ * into one proof; a participants bitfield records who signed. Toggle validators
+ * on/off to see the bitfield and proof update live.
  *
- * Part 2 (§6.5.4, Fig 6.7): Gossip pool has overlapping aggregates (A:1100, B:0110,
- * C:0011). Proposer runs greedy set-cover to pick the minimal subset whose union covers
- * the most distinct validators. Redundant aggregates (e.g. B) are dropped.
+ * Part 2 — MultiMessageAggregate: a block gathers several single-message
+ * aggregates over DISTINCT messages and merges them into ONE proof
+ * (merge_many_single_message_proof). The block carries that single proof as
+ * SignedBlock.proof. There is NO greedy "set-cover packing" — every
+ * single-message aggregate is merged into the one multi-message proof, and the
+ * merged proof stores no public keys (they are supplied at verify time).
  */
 "use strict";
 
@@ -21,39 +28,46 @@
   const AGGREGATE_BOX_HEIGHT = 40;
   const BIT_CELL_SIZE = 28;
   const MERGE_ANIMATION_DURATION = 0.8;
+  const MULTI_MERGE_DURATION = 0.9;
 
   const C_PRESENT = "#36d399";
   const C_ABSENT = "#3a2530";
   const C_AGGREGATE_BOX = "#1e3a2a";
   const C_AGGREGATE_BORDER = "#36d399";
-  const C_REDUNDANT = "#f8717155";
-  const C_CHOSEN = "#36d39944";
   const C_BIT_ONE = "#36d399";
   const C_BIT_ZERO = "#3a4a63";
+  const C_MMA_BORDER = "#22d3ee";
+  const C_MMA_BOX = "#15323a";
 
-  const DEFAULT_AGGREGATES = [
-    { label: "A", bits: [1, 1, 0, 0] },
-    { label: "B", bits: [0, 1, 1, 0] },
-    { label: "C", bits: [0, 0, 1, 1] },
+  /* Distinct single-message aggregates (each over its own AttestationData /
+   * message). Participants may overlap across messages — they are different
+   * messages, so they merge rather than dedupe. */
+  const DEFAULT_MESSAGES = [
+    { label: "SMA₁", msg: "target s12", bits: [1, 1, 0, 1] },
+    { label: "SMA₂", msg: "target s13", bits: [0, 1, 1, 0] },
+    { label: "SMA₃", msg: "target s14", bits: [1, 0, 1, 1] },
+    { label: "SMA₄", msg: "target s15", bits: [0, 1, 0, 1] },
   ];
 
   const scene = {
     id: "aggregation",
-    title: "署名集約とパッキング",
+    title: "署名集約と統合",
     sectionRef: "6.4",
     descriptionHTML: `
-      <p><b>Part 1 — 署名集約 (§6.4):</b></p>
-      <p>同じ AttestationData に投票したバリデータの XMSS 署名(ハッシュベース・耐量子)を
-      <b>1本の集約署名</b>に統合。XMSS 署名は大きいため圧縮が必須 (§6.4.2)。
-      参加ビットフィールド: ビット i=1 → バリデータ i が投票済み、0 → 欠席。</p>
-      <p>各バリデータの ON/OFF を切り替えると bitfield と集約が即座に更新される。
-      「集約アニメーション」で個別署名が合流する様子を再生。</p>
-      <p><b>Part 2 — Proposer パッキング / Set-Cover (§6.5.4, Fig 6.7):</b></p>
-      <p>ゴシッププールには重複する集約が存在 (例: A:1100, B:0110, C:0011)。
-      Proposer は<b>最小集合で最多 validator をカバー</b>する set-cover を解く。
-      貪欲法: A+C → 1111 (フルカバー)、B は冗長として除外。</p>
-      <p>「パッキング実行」でアニメーション付きの set-cover を表示。
-      集約のビットを編集して結果の変化を確認できる。</p>`,
+      <p><b>Part 1 — 単一メッセージ集約 (SingleMessageAggregate):</b></p>
+      <p>同じ AttestationData(メッセージ)に投票したバリデータの XMSS 署名
+      (ハッシュベース・耐量子)を <b>1本の証明</b>に統合。<code>participants</code>
+      ビットフィールドが「誰が署名したか」を記録する(ビット i=1 → バリデータ i が署名)。
+      公開鍵は proof に含めず、検証側がブロック本体から再導出する。</p>
+      <p>各バリデータの ON/OFF を切り替えると bitfield と集約が即座に更新される。</p>
+      <p><b>Part 2 — マルチメッセージ統合 (MultiMessageAggregate):</b></p>
+      <p>ブロックは<b>異なるメッセージ</b>に対する複数の SingleMessageAggregate を集め、
+      <code>merge_many_single_message_proof</code> で <b>1本の proof</b> に統合する。
+      ブロックはこの単一 proof を <code>SignedBlock.proof</code> として運ぶ。</p>
+      <p><b>貪欲 set-cover パッキングは存在しない</b> — 重複を選り分けるのではなく、
+      全ての single-message aggregate を1本の multi-message proof にマージする。
+      統合後の proof は公開鍵もビットフィールドも持たず、検証時に外部から供給される。</p>
+      <p>「マージ実行」で統合アニメーションを再生。「メッセージ数」で統合する SMA の数を変更できる。</p>`,
 
     width: 0, height: 0, rng: null,
 
@@ -64,18 +78,18 @@
     mergeAnimationRunning: false,
 
     // Part 2.
-    poolAggregates: [],
-    poolValidatorCount: 4,
-    packingResult: null,
-    packingAnimationProgress: 0,
-    packingAnimationRunning: false,
+    messages: [],
+    mergeValidatorCount: 4,
+    multiMergeResult: null,
+    multiMergeProgress: 0,
+    multiMergeRunning: false,
 
     init(env) {
       this.width = env.width;
       this.height = env.height;
       this.rng = util.makeRng(0xdeadbeef);
       this.initCommittee();
-      this.initPool();
+      this.initMessages(3);
     },
 
     resize(width, height) { this.width = width; this.height = height; },
@@ -86,12 +100,14 @@
       this.mergeAnimationRunning = false;
     },
 
-    initPool() {
-      this.poolAggregates = DEFAULT_AGGREGATES.map((agg) => ({ label: agg.label, bits: [...agg.bits] }));
-      this.poolValidatorCount = 4;
-      this.packingResult = null;
-      this.packingAnimationProgress = 0;
-      this.packingAnimationRunning = false;
+    initMessages(count) {
+      const messageCount = util.clamp(count, 2, DEFAULT_MESSAGES.length);
+      this.messages = DEFAULT_MESSAGES.slice(0, messageCount).map((m) => ({
+        label: m.label, msg: m.msg, bits: [...m.bits],
+      }));
+      this.multiMergeResult = null;
+      this.multiMergeProgress = 0;
+      this.multiMergeRunning = false;
     },
 
     presentCount() { return this.validatorPresent.filter(Boolean).length; },
@@ -101,51 +117,10 @@
       this.mergeAnimationRunning = true;
     },
 
-    runPackingSetCover() {
-      const validatorCount = this.poolValidatorCount;
-      const covered = new Array(validatorCount).fill(false);
-      const chosenIndices = [];
-      const remaining = new Set(this.poolAggregates.map((_, index) => index));
-
-      let madeProgress = true;
-      while (madeProgress) {
-        madeProgress = false;
-        let bestAggregateIndex = -1;
-        let bestNewCoverageCount = 0;
-        for (const aggregateIndex of remaining) {
-          const aggregate = this.poolAggregates[aggregateIndex];
-          let newCoverageCount = 0;
-          for (let bitIndex = 0; bitIndex < validatorCount; bitIndex++) {
-            if (aggregate.bits[bitIndex] && !covered[bitIndex]) newCoverageCount++;
-          }
-          if (newCoverageCount > bestNewCoverageCount) {
-            bestNewCoverageCount = newCoverageCount;
-            bestAggregateIndex = aggregateIndex;
-          }
-        }
-        if (bestAggregateIndex >= 0 && bestNewCoverageCount > 0) {
-          chosenIndices.push(bestAggregateIndex);
-          remaining.delete(bestAggregateIndex);
-          const chosenAggregate = this.poolAggregates[bestAggregateIndex];
-          for (let bitIndex = 0; bitIndex < validatorCount; bitIndex++) {
-            if (chosenAggregate.bits[bitIndex]) covered[bitIndex] = true;
-          }
-          madeProgress = true;
-        }
-      }
-
-      const redundantIndices = this.poolAggregates
-        .map((_, index) => index)
-        .filter((index) => !chosenIndices.includes(index));
-
-      this.packingResult = { chosen: chosenIndices, redundant: redundantIndices, coverUnion: covered };
-      this.packingAnimationProgress = 0;
-      this.packingAnimationRunning = true;
-    },
-
-    coveragePercent() {
-      if (!this.packingResult) return 0;
-      return Math.round(this.packingResult.coverUnion.filter(Boolean).length / this.poolValidatorCount * 100);
+    runMultiMerge() {
+      this.multiMergeResult = { count: this.messages.length };
+      this.multiMergeProgress = 0;
+      this.multiMergeRunning = true;
     },
 
     update(realDt) {
@@ -153,9 +128,9 @@
         this.mergeAnimationProgress = Math.min(1, this.mergeAnimationProgress + realDt / MERGE_ANIMATION_DURATION);
         if (this.mergeAnimationProgress >= 1) this.mergeAnimationRunning = false;
       }
-      if (this.packingAnimationRunning) {
-        this.packingAnimationProgress = Math.min(1, this.packingAnimationProgress + realDt / 0.9);
-        if (this.packingAnimationProgress >= 1) this.packingAnimationRunning = false;
+      if (this.multiMergeRunning) {
+        this.multiMergeProgress = Math.min(1, this.multiMergeProgress + realDt / MULTI_MERGE_DURATION);
+        if (this.multiMergeProgress >= 1) this.multiMergeRunning = false;
       }
     },
 
@@ -165,11 +140,11 @@
       if (useSideBySide) {
         const halfWidth = Math.floor(this.width / 2) - PADDING;
         this.renderAggregationPanel(ctx, PADDING, PADDING, halfWidth, this.height - PADDING * 2);
-        this.renderPackingPanel(ctx, Math.floor(this.width / 2) + PADDING / 2, PADDING, halfWidth, this.height - PADDING * 2);
+        this.renderMergePanel(ctx, Math.floor(this.width / 2) + PADDING / 2, PADDING, halfWidth, this.height - PADDING * 2);
       } else {
         const halfHeight = Math.floor(this.height / 2) - PADDING;
         this.renderAggregationPanel(ctx, PADDING, PADDING, this.width - PADDING * 2, halfHeight);
-        this.renderPackingPanel(ctx, PADDING, Math.floor(this.height / 2) + PADDING / 2, this.width - PADDING * 2, halfHeight);
+        this.renderMergePanel(ctx, PADDING, Math.floor(this.height / 2) + PADDING / 2, this.width - PADDING * 2, halfHeight);
       }
     },
 
@@ -183,14 +158,14 @@
       ctx.stroke();
       ctx.restore();
 
-      draw.label(ctx, "Part 1 — 署名集約 (§6.4)", panelX + panelWidth / 2, panelY + 18,
+      draw.label(ctx, "Part 1 — SingleMessageAggregate", panelX + panelWidth / 2, panelY + 18,
         colors.accent, "bold 12px ui-monospace,monospace");
 
       const contentX = panelX + PADDING;
       const contentWidth = panelWidth - PADDING * 2;
       let currentY = panelY + 42;
 
-      draw.label(ctx, "委員会バリデータ", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
+      draw.label(ctx, "委員会バリデータ (同一メッセージに署名)", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
       currentY += 18;
 
       const cellTotalWidth = VALIDATOR_CELL_SIZE + VALIDATOR_CELL_GAP;
@@ -248,7 +223,7 @@
         }
       }
 
-      // Aggregate signature box.
+      // Single-message aggregate proof box.
       const aggregateBoxX = contentX + contentWidth / 4;
       const aggregateBoxWidth = contentWidth / 2;
       const aggregateBoxY = currentY + 6;
@@ -262,12 +237,12 @@
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, `集約署名 (${this.presentCount()} sigs → 1)`,
+      draw.label(ctx, `SingleMessageAggregate (${this.presentCount()} sigs → 1)`,
         contentX + contentWidth / 2, aggregateBoxY + AGGREGATE_BOX_HEIGHT / 2,
         C_PRESENT, "bold 11px ui-monospace,monospace");
 
       currentY = aggregateBoxY + AGGREGATE_BOX_HEIGHT + 16;
-      draw.label(ctx, "参加ビットフィールド:", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
+      draw.label(ctx, "participants bitfield:", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
       currentY += 14;
 
       const bitCellTotalWidth = BIT_CELL_SIZE + 4;
@@ -291,12 +266,12 @@
       }
       const bitfieldRowCount = Math.ceil(this.committeeSize / bitsPerRow);
       currentY += bitfieldRowCount * (BIT_CELL_SIZE + 4) + 8;
-      draw.label(ctx, `popcount = ${this.presentCount()} / ${this.committeeSize}  |  集約署名 = 1 本`,
+      draw.label(ctx, `popcount = ${this.presentCount()} / ${this.committeeSize}  |  proof = 1 本`,
         contentX + contentWidth / 2, Math.min(currentY, panelY + panelHeight - 14),
         colors.text, "11px ui-monospace,monospace");
     },
 
-    renderPackingPanel(ctx, panelX, panelY, panelWidth, panelHeight) {
+    renderMergePanel(ctx, panelX, panelY, panelWidth, panelHeight) {
       ctx.save();
       draw.roundedRect(ctx, panelX, panelY, panelWidth, panelHeight, PANEL_RADIUS);
       ctx.fillStyle = colors.panel;
@@ -306,93 +281,96 @@
       ctx.stroke();
       ctx.restore();
 
-      draw.label(ctx, "Part 2 — Proposer パッキング / Set-Cover (§6.5.4)",
-        panelX + panelWidth / 2, panelY + 18, colors.accent, "bold 12px ui-monospace,monospace");
+      draw.label(ctx, "Part 2 — MultiMessageAggregate", panelX + panelWidth / 2, panelY + 18,
+        colors.accent, "bold 12px ui-monospace,monospace");
 
       const contentX = panelX + PADDING;
       const contentWidth = panelWidth - PADDING * 2;
-      let currentY = panelY + 42;
-      const validatorCount = this.poolValidatorCount;
-      const headerCellWidth = Math.min(40, Math.floor((contentWidth - 60) / validatorCount));
+      let currentY = panelY + 40;
+      const validatorCount = this.mergeValidatorCount;
+      const headerCellWidth = Math.min(34, Math.floor((contentWidth - 120) / validatorCount));
 
-      draw.label(ctx, "集約", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
-      for (let validatorIndex = 0; validatorIndex < validatorCount; validatorIndex++) {
-        draw.label(ctx, `V${validatorIndex}`,
-          contentX + 60 + validatorIndex * headerCellWidth + headerCellWidth / 2,
-          currentY, colors.textDim, "10px ui-monospace,monospace");
-      }
-      currentY += 18;
+      draw.label(ctx, "single-message aggregates (異なるメッセージ)", contentX, currentY,
+        colors.textDim, "10px ui-monospace,monospace", "left");
+      currentY += 16;
 
-      const aggregateRowHeight = 36;
-      for (let aggregateIndex = 0; aggregateIndex < this.poolAggregates.length; aggregateIndex++) {
-        const aggregate = this.poolAggregates[aggregateIndex];
-        const aggregateRowY = currentY + aggregateIndex * (aggregateRowHeight + 6);
-        const isChosen = this.packingResult && this.packingResult.chosen.includes(aggregateIndex) && this.packingAnimationProgress > aggregateIndex * 0.2;
-        const isRedundant = this.packingResult && this.packingResult.redundant.includes(aggregateIndex) && this.packingAnimationProgress > 0.6;
+      // Each single-message aggregate: label, message, participants bitfield, proof chip.
+      const rowHeight = 34;
+      const eased = ease.outCubic(this.multiMergeProgress);
+      for (let messageIndex = 0; messageIndex < this.messages.length; messageIndex++) {
+        const sma = this.messages[messageIndex];
+        const rowY = currentY + messageIndex * (rowHeight + 6);
 
-        if (isChosen || isRedundant) {
-          ctx.save();
-          draw.roundedRect(ctx, contentX, aggregateRowY, contentWidth, aggregateRowHeight, 6);
-          ctx.fillStyle = isChosen ? C_CHOSEN : C_REDUNDANT;
-          ctx.fill();
-          if (isChosen) { ctx.strokeStyle = C_AGGREGATE_BORDER; ctx.lineWidth = 1.5; ctx.stroke(); }
-          ctx.restore();
-        }
+        draw.label(ctx, sma.label, contentX + 4, rowY + rowHeight / 2,
+          C_PRESENT, "bold 12px ui-monospace,monospace", "left");
+        draw.label(ctx, sma.msg, contentX + 4, rowY + rowHeight / 2 + 13,
+          colors.textDim, "8px ui-monospace,monospace", "left");
 
-        draw.label(ctx, aggregate.label, contentX + 14, aggregateRowY + aggregateRowHeight / 2,
-          isChosen ? C_PRESENT : isRedundant ? "#f87171" : colors.text, "bold 14px ui-monospace,monospace");
-
+        const bitsX = contentX + 76;
         for (let bitIndex = 0; bitIndex < validatorCount; bitIndex++) {
-          const bitCellX = contentX + 60 + bitIndex * headerCellWidth;
-          const bitValue = aggregate.bits[bitIndex] ? 1 : 0;
+          const bitCellX = bitsX + bitIndex * headerCellWidth;
+          const bitValue = sma.bits[bitIndex] ? 1 : 0;
           ctx.save();
-          draw.roundedRect(ctx, bitCellX + 2, aggregateRowY + 4, headerCellWidth - 4, aggregateRowHeight - 8, 4);
+          draw.roundedRect(ctx, bitCellX + 2, rowY + 4, headerCellWidth - 4, rowHeight - 8, 4);
           ctx.fillStyle = bitValue ? C_BIT_ONE + "44" : C_BIT_ZERO + "33";
           ctx.fill();
           ctx.strokeStyle = bitValue ? C_BIT_ONE : C_BIT_ZERO;
           ctx.lineWidth = 1.5;
           ctx.stroke();
           ctx.restore();
-          draw.label(ctx, String(bitValue), bitCellX + headerCellWidth / 2, aggregateRowY + aggregateRowHeight / 2,
-            bitValue ? C_BIT_ONE : colors.textDim, "bold 12px ui-monospace,monospace");
+          draw.label(ctx, String(bitValue), bitCellX + headerCellWidth / 2, rowY + rowHeight / 2,
+            bitValue ? C_BIT_ONE : colors.textDim, "bold 11px ui-monospace,monospace");
         }
 
-        if (this.packingResult && this.packingAnimationProgress > 0.4) {
-          const statusLabel = isChosen ? "✓ 選択" : isRedundant ? "✗ 冗長" : "";
-          if (statusLabel) {
-            draw.label(ctx, statusLabel, panelX + panelWidth - PADDING - 8, aggregateRowY + aggregateRowHeight / 2,
-              isChosen ? C_PRESENT : "#f87171", "bold 10px ui-monospace,monospace", "right");
-          }
-        }
+        // proof chip
+        const chipX = bitsX + validatorCount * headerCellWidth + 8;
+        ctx.save();
+        draw.roundedRect(ctx, chipX, rowY + 6, 44, rowHeight - 12, 4);
+        ctx.strokeStyle = C_AGGREGATE_BORDER;
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.restore();
+        draw.label(ctx, "proof", chipX + 22, rowY + rowHeight / 2, C_AGGREGATE_BORDER, "8px ui-monospace,monospace");
       }
 
-      currentY += this.poolAggregates.length * (aggregateRowHeight + 6) + 12;
+      currentY += this.messages.length * (rowHeight + 6) + 6;
 
-      if (this.packingResult && this.packingAnimationProgress > 0.7) {
-        draw.label(ctx, "カバー合計:", contentX, currentY, colors.textDim, "10px ui-monospace,monospace", "left");
-        for (let validatorIndex = 0; validatorIndex < validatorCount; validatorIndex++) {
-          const bitCellX = contentX + 60 + validatorIndex * headerCellWidth;
-          const isCovered = this.packingResult.coverUnion[validatorIndex];
-          ctx.save();
-          draw.roundedRect(ctx, bitCellX + 2, currentY - 10, headerCellWidth - 4, 24, 4);
-          ctx.fillStyle = isCovered ? C_PRESENT + "55" : C_BIT_ZERO + "33";
-          ctx.fill();
-          ctx.strokeStyle = isCovered ? C_PRESENT : C_BIT_ZERO;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.restore();
-          draw.label(ctx, isCovered ? "1" : "0", bitCellX + headerCellWidth / 2, currentY + 2,
-            isCovered ? C_PRESENT : colors.textDim, "bold 12px ui-monospace,monospace");
-        }
-        currentY += 30;
-        const coveredCount = this.packingResult.coverUnion.filter(Boolean).length;
-        draw.label(ctx,
-          `カバー率: ${coveredCount}/${validatorCount} = ${this.coveragePercent()}%  |  使用集約数: ${this.packingResult.chosen.length}/${this.poolAggregates.length}`,
-          contentX + contentWidth / 2, Math.min(currentY, panelY + panelHeight - 14),
-          colors.text, "bold 11px ui-monospace,monospace");
-      } else if (!this.packingResult) {
-        draw.label(ctx, "「パッキング実行」でSet-Coverを実行",
-          contentX + contentWidth / 2, currentY + 10, colors.textDim, "11px ui-monospace,monospace");
+      // Merge arrow + the single MultiMessageAggregate output.
+      const mergeLabel = this.multiMergeResult ? "merge_many_single_message_proof()" : "「マージ実行」で統合";
+      draw.label(ctx, "▼ " + mergeLabel, panelX + panelWidth / 2, currentY + 6,
+        this.multiMergeResult ? C_MMA_BORDER : colors.textDim, "10px ui-monospace,monospace");
+      currentY += 22;
+
+      const mmaWidth = contentWidth * 0.7;
+      const mmaX = contentX + (contentWidth - mmaWidth) / 2;
+      const mmaHeight = 40;
+      const mmaAlpha = this.multiMergeResult ? Math.max(0.3, ease.outCubic(this.multiMergeProgress * 1.5)) : 0.25;
+      ctx.save();
+      ctx.globalAlpha = mmaAlpha;
+      draw.roundedRect(ctx, mmaX, currentY, mmaWidth, mmaHeight, 6);
+      ctx.fillStyle = C_MMA_BOX;
+      ctx.fill();
+      ctx.strokeStyle = C_MMA_BORDER;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+      draw.label(ctx, "MultiMessageAggregate { proof }", mmaX + mmaWidth / 2, currentY + 16,
+        C_MMA_BORDER, "bold 11px ui-monospace,monospace");
+      draw.label(ctx,
+        this.multiMergeResult ? `${this.multiMergeResult.count} SMA → 1 proof` : "公開鍵・bitfield を持たない単一 proof",
+        mmaX + mmaWidth / 2, currentY + 30, colors.textDim, "9px ui-monospace,monospace");
+      currentY += mmaHeight + 12;
+
+      draw.label(ctx, "→ SignedBlock.proof として運ばれる (set-cover ではなく全 SMA を統合)",
+        panelX + panelWidth / 2, Math.min(currentY, panelY + panelHeight - 12),
+        colors.text, "9px ui-monospace,monospace");
+
+      // A faint pulse on the MMA box while merging.
+      if (this.multiMergeRunning) {
+        ctx.save();
+        ctx.globalAlpha = 0.4 * (1 - eased);
+        draw.glow(ctx, mmaX + mmaWidth / 2, currentY - mmaHeight - 6, 28, C_MMA_BORDER);
+        ctx.restore();
       }
     },
 
@@ -402,17 +380,16 @@
       return [
         { label: "委員会サイズ", value: this.committeeSize },
         { label: "参加 (popcount)", value: `${this.presentCount()} / ${this.committeeSize}` },
-        { label: "集約署名", value: 1 },
-        { label: "利用可能な集約数", value: this.poolAggregates.length },
-        { label: "選択された集約", value: this.packingResult ? this.packingResult.chosen.length : "—" },
-        { label: "カバー率", value: this.packingResult ? `${this.coveragePercent()}%` : "—" },
+        { label: "SingleMessageAggregate", value: 1 },
+        { label: "統合する SMA 数", value: this.messages.length },
+        { label: "MultiMessageAggregate", value: this.multiMergeResult ? "1 proof" : "—" },
       ];
     },
 
     buildControls(container) {
       const ui = P2P.ui;
 
-      const aggregationGroup = ui.group("Part 1 — 署名集約");
+      const aggregationGroup = ui.group("Part 1 — SingleMessageAggregate");
       aggregationGroup.appendChild(ui.button("集約アニメーション", () => this.triggerMergeAnimation(), "primary"));
       aggregationGroup.appendChild(
         ui.slider("委員会サイズ", 4, 16, 1, this.committeeSize, (value) => {
@@ -443,46 +420,21 @@
       aggregationGroup.appendChild(validatorToggleGroup);
       container.appendChild(aggregationGroup);
 
-      const packingGroup = ui.group("Part 2 — Proposer パッキング");
-      packingGroup.appendChild(ui.button("パッキング実行 ▶", () => this.runPackingSetCover(), "primary"));
-      packingGroup.appendChild(
+      const mergeGroup = ui.group("Part 2 — MultiMessageAggregate");
+      mergeGroup.appendChild(ui.button("マージ実行 ▶", () => this.runMultiMerge(), "primary"));
+      mergeGroup.appendChild(
         ui.button("結果をクリア", () => {
-          this.packingResult = null;
-          this.packingAnimationProgress = 0;
-          this.packingAnimationRunning = false;
+          this.multiMergeResult = null;
+          this.multiMergeProgress = 0;
+          this.multiMergeRunning = false;
         }),
       );
-
-      const bitToggleGroup = ui.group("集約ビット編集");
-      const bitHeading = document.createElement("div");
-      bitHeading.className = "ctl-group-title";
-      bitHeading.textContent = "集約ビット編集";
-      bitToggleGroup.appendChild(bitHeading);
-
-      for (let aggregateIndex = 0; aggregateIndex < this.poolAggregates.length; aggregateIndex++) {
-        const aggregate = this.poolAggregates[aggregateIndex];
-        const aggLabel = document.createElement("div");
-        aggLabel.className = "ctl-group-title";
-        aggLabel.style.fontSize = "10px";
-        aggLabel.textContent = `集約 ${aggregate.label}:`;
-        bitToggleGroup.appendChild(aggLabel);
-        for (let bitIndex = 0; bitIndex < this.poolValidatorCount; bitIndex++) {
-          const capturedAggregateIndex = aggregateIndex;
-          const capturedBitIndex = bitIndex;
-          bitToggleGroup.appendChild(
-            ui.toggle(`V${bitIndex}`, !!aggregate.bits[bitIndex], (checked) => {
-              this.poolAggregates[capturedAggregateIndex].bits[capturedBitIndex] = checked ? 1 : 0;
-              this.packingResult = null;
-            }),
-          );
-        }
-      }
-      packingGroup.appendChild(bitToggleGroup);
-
-      const presetGroup = ui.group("プリセット");
-      presetGroup.appendChild(ui.button("リセット (A:1100 B:0110 C:0011)", () => this.initPool()));
-      packingGroup.appendChild(presetGroup);
-      container.appendChild(packingGroup);
+      mergeGroup.appendChild(
+        ui.slider("メッセージ数 (distinct messages)", 2, DEFAULT_MESSAGES.length, 1, this.messages.length, (value) => {
+          this.initMessages(Math.round(value));
+        }),
+      );
+      container.appendChild(mergeGroup);
     },
   };
 
