@@ -82,8 +82,8 @@
       <p><b>② ヘッダ検証 (§4.3.2):</b> proposer_index・parent_root（state の
       latest_block_header と照合）・slot の3検査。いずれか失敗で即却下。</p>
       <p><b>③ ペイロード実行 (§4.3.3):</b> body.attestations を順に処理。source が
-      justified 済みなら重みを計上、2/3 超で target を justified に昇格。
-      無効票はソフトフェイル（スキップ）。</p>
+      justified 済みなら票を計上、2/3 超（3·票 ≥ 2·N、重みはバリデータ数で等価）で
+      target を justified に昇格。無効票はソフトフェイル（スキップ）。</p>
       <p><b>④ integrity 検証 (§4.3.4):</b> HashTreeRoot(S<sub>n+1</sub>) と
       block.header.state_root を照合。一致で受理、嘘なら却下。</p>
       <p><b>操作:</b> フィールドに<b>ホバー/クリック</b>すると役割の解説が中央に出ます
@@ -144,19 +144,20 @@
       this.scenario = SCENARIOS[this.scenarioKey];
 
       const stateSlot = 10;
-      const totalActiveStake = 3200;
+      const totalValidators = 32;
       this.stateSnapshot = {
         slot: stateSlot,
         latestBlockHashHex: "0xa1b2",
         latestJustifiedSlot: 8,
         latestFinalizedSlot: 6,
-        totalActiveStake,
-        justifiedWeight: 0,
+        totalValidators,
+        justifiedVotes: 0,
       };
       this.currentState = { ...this.stateSnapshot };
 
       const blockSlot = stateSlot + this.emptySlotCount;
-      const correctProposerIndex = 42;
+      // Proposer is deterministic: block.slot % num_validators (state_transition.py).
+      const correctProposerIndex = blockSlot % totalValidators;
       const correctParentRoot = "0xa1b2";
       const correctStateRoot = "0xc3d4";
 
@@ -171,8 +172,9 @@
         correctStateRoot,
       };
 
-      const validAttestationWeight = 1200;
-      const invalidAttestationWeight = 300;
+      // Each aggregated attestation covers a disjoint set of validators voting
+      // for the target; 4 aggregates x 8 = the full 32-validator registry.
+      const perAttestationVotes = 8;
       const totalAttestationCount = 4;
       this.attestations = [];
       for (let attestationIndex = 0; attestationIndex < totalAttestationCount; attestationIndex++) {
@@ -181,7 +183,7 @@
           index: attestationIndex,
           sourceSlot: isInvalid ? 3 : 8,
           targetSlot: blockSlot,
-          validatorWeight: isInvalid ? invalidAttestationWeight : validAttestationWeight,
+          voteCount: perAttestationVotes,
           sourceJustified: !isInvalid,
           status: "pending",
         });
@@ -191,8 +193,8 @@
 
     buildPhaseSteps() {
       const { emptySlotCount, stateSnapshot, blockData, attestations } = this;
-      const totalActiveStake = stateSnapshot.totalActiveStake;
-      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
+      const totalValidators = stateSnapshot.totalValidators;
+      const superMajorityThreshold = Math.ceil((totalValidators * 2) / 3);
 
       return [
         ...Array.from({ length: emptySlotCount }, (_, slotOffset) => ({
@@ -212,8 +214,8 @@
           kind: "header-check",
           passed: this.scenario.proposerValid,
           description: this.scenario.proposerValid
-            ? `proposer_index ${blockData.proposerIndex} == expected ${blockData.correctProposerIndex} ✓`
-            : `proposer_index ${blockData.proposerIndex} ≠ expected ${blockData.correctProposerIndex} ✗ → 却下`,
+            ? `proposer_index ${blockData.proposerIndex} == block.slot % N (${blockData.correctProposerIndex}) ✓`
+            : `proposer_index ${blockData.proposerIndex} ≠ block.slot % N (${blockData.correctProposerIndex}) ✗ → 却下`,
         },
         {
           phase: 1,
@@ -242,7 +244,7 @@
           kind: "attestation",
           attestationIndex,
           description: attestation.sourceJustified
-            ? `attestation[${attestationIndex}]: source slot ${attestation.sourceSlot} は justified ✓ → 重み +${attestation.validatorWeight} ETH`
+            ? `attestation[${attestationIndex}]: source slot ${attestation.sourceSlot} は justified ✓ → +${attestation.voteCount} 票`
             : `attestation[${attestationIndex}]: source slot ${attestation.sourceSlot} は未 justified ✗ → スキップ(ソフトフェイル)`,
         })),
         {
@@ -250,12 +252,12 @@
           kind: "phase-result",
           result: "pass",
           description: (() => {
-            const validWeight = attestations
+            const validVotes = attestations
               .filter((a) => a.sourceJustified)
-              .reduce((sum, a) => sum + a.validatorWeight, 0);
-            const ratio = ((validWeight / totalActiveStake) * 100).toFixed(1);
-            const justified = validWeight >= superMajorityThreshold;
-            return `有効投票 ${validWeight} / ${totalActiveStake} ETH (${ratio}%) — ` +
+              .reduce((sum, a) => sum + a.voteCount, 0);
+            const ratio = ((validVotes / totalValidators) * 100).toFixed(1);
+            const justified = 3 * validVotes >= 2 * totalValidators;
+            return `有効投票 ${validVotes} / ${totalValidators} validators (${ratio}%) — ` +
               (justified ? `2/3 超 → justified ✓` : `2/3 未満 — 正当化なし`);
           })(),
         },
@@ -308,10 +310,10 @@
         const attestation = this.attestations[step.attestationIndex];
         if (attestation.sourceJustified) {
           attestation.status = "counted";
-          const previousWeight = this.currentState.justifiedWeight || 0;
+          const previousVotes = this.currentState.justifiedVotes || 0;
           this.currentState = {
             ...this.currentState,
-            justifiedWeight: previousWeight + attestation.validatorWeight,
+            justifiedVotes: previousVotes + attestation.voteCount,
           };
         } else {
           attestation.status = "ignored";
@@ -516,11 +518,11 @@
       const barWidth = containerWidth - 24;
       const barHeight = 14;
 
-      const totalActiveStake = this.currentState.totalActiveStake;
-      const justifiedWeight = this.currentState.justifiedWeight || 0;
-      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
-      const fillFraction = Math.min(1, justifiedWeight / totalActiveStake);
-      const thresholdFraction = superMajorityThreshold / totalActiveStake;
+      const totalValidators = this.currentState.totalValidators;
+      const justifiedVotes = this.currentState.justifiedVotes || 0;
+      const superMajorityThreshold = Math.ceil((totalValidators * 2) / 3);
+      const fillFraction = Math.min(1, justifiedVotes / totalValidators);
+      const thresholdFraction = superMajorityThreshold / totalValidators;
 
       ctx.save();
       draw.roundedRect(ctx, barX, originY, barWidth, barHeight, 4);
@@ -528,15 +530,15 @@
       ctx.fill();
       if (fillFraction > 0) {
         draw.roundedRect(ctx, barX, originY, barWidth * fillFraction, barHeight, 4);
-        ctx.fillStyle = fillFraction >= thresholdFraction ? colors.nodeHasMessage : colors.nodeActive;
+        ctx.fillStyle = 3 * justifiedVotes >= 2 * totalValidators ? colors.nodeHasMessage : colors.nodeActive;
         ctx.fill();
       }
       const thresholdX = barX + barWidth * thresholdFraction;
       ctx.restore();
       draw.line(ctx, thresholdX, originY - 4, thresholdX, originY + barHeight + 4, colors.nodeSource, 1.5, true);
       draw.label(ctx, "2/3", thresholdX, originY - 12, colors.nodeSource, "9px ui-monospace, monospace");
-      const percentage = ((justifiedWeight / totalActiveStake) * 100).toFixed(1);
-      draw.label(ctx, `有効投票: ${justifiedWeight} / ${totalActiveStake} ETH (${percentage}%)`,
+      const percentage = ((justifiedVotes / totalValidators) * 100).toFixed(1);
+      draw.label(ctx, `有効投票: ${justifiedVotes} / ${totalValidators} validators (${percentage}%)`,
         originX + containerWidth / 2, originY + barHeight + 14, colors.text, "10px ui-monospace, monospace");
     },
 
@@ -590,11 +592,11 @@
           { label: "現在フェーズ", value: `${PHASE_LABELS[this.currentPhaseIndex].number}. ${PHASE_LABELS[this.currentPhaseIndex].title}` },
         ];
       }
-      const justifiedWeight = this.currentState.justifiedWeight || 0;
-      const totalActiveStake = this.currentState.totalActiveStake;
-      const percentage = ((justifiedWeight / totalActiveStake) * 100).toFixed(1);
-      const superMajorityThreshold = Math.ceil((totalActiveStake * 2) / 3);
-      const vsThreshold = `${percentage}% / ${((superMajorityThreshold / totalActiveStake) * 100).toFixed(0)}%`;
+      const justifiedVotes = this.currentState.justifiedVotes || 0;
+      const totalValidators = this.currentState.totalValidators;
+      const percentage = ((justifiedVotes / totalValidators) * 100).toFixed(1);
+      const superMajorityThreshold = Math.ceil((totalValidators * 2) / 3);
+      const vsThreshold = `${percentage}% / ${((superMajorityThreshold / totalValidators) * 100).toFixed(0)}%`;
       const phaseLabel = PHASE_LABELS[this.currentPhaseIndex];
       const verdictLabel = this.finalVerdict === "accept" ? "受理 ✓"
         : this.finalVerdict === "reject" ? "却下 ✗" : "進行中";
@@ -604,7 +606,7 @@
         { label: "block.slot", value: `${this.blockData ? this.blockData.slot : "-"}` },
         { label: "justified (slot)", value: `${this.currentState.latestJustifiedSlot}` },
         { label: "finalized (slot)", value: `${this.currentState.latestFinalizedSlot}` },
-        { label: "投票重み/総ステーク", value: vsThreshold },
+        { label: "得票/総バリデータ", value: vsThreshold },
         { label: "判定", value: verdictLabel },
       ];
     },
