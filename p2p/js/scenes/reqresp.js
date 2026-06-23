@@ -151,7 +151,7 @@
       const requesterX = this.width * 0.26;
       const responderX = this.width * 0.74;
       const top = 54;
-      const bottomLimit = this.height - 200;
+      const bottomLimit = this.height - 175;
 
       // Lifelines.
       draw.line(ctx, requesterX, top, requesterX, bottomLimit, colors.grid, 1.6, false);
@@ -164,8 +164,8 @@
       const rowHeight = Math.min(34, (bottomLimit - top) / Math.max(this.messages.length, 1));
       const rowY = (index) => top + (index + 0.5) * rowHeight;
       // Lift arrow labels above their line, but never so far they reach the row
-      // above — keep a >=13px gap to the previous row even on a short panel.
-      const labelLift = Math.max(0, Math.min(9, rowHeight - 13));
+      // above — keep a >=16px gap to the previous row even on a short panel.
+      const labelLift = Math.max(0, Math.min(9, rowHeight - 16));
 
       let halfClosed = false;
       this.messages.forEach((message, index) => {
@@ -177,8 +177,11 @@
         } else if (message.kind === "halfclose") {
           if (this.clock >= message.t) {
             halfClosed = true;
-            draw.label(ctx, "⊣ EOF", requesterX, y, colors.iwant, "12px ui-monospace, monospace");
-            draw.label(ctx, message.label, requesterX + 16, y, colors.iwant, "11px ui-monospace, monospace", "left");
+            // EOF marker on the requester lifeline + a centred description, kept
+            // far apart so they never run together (the "⊣ EOF" badge and the
+            // text used to abut into "EOFwrite").
+            draw.label(ctx, "⊣", requesterX, y, colors.iwant, "14px ui-monospace, monospace");
+            draw.label(ctx, message.label, this.width / 2, y, colors.iwant, "11px ui-monospace, monospace");
           }
         } else if (message.kind === "processing") {
           if (this.clock >= message.t && this.clock < CHUNK_START) {
