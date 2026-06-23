@@ -4,8 +4,10 @@
  * Two animated comparisons:
  *   - Head-of-line blocking (Figure 5.11): one lost packet stalls every
  *     multiplexed stream under TCP, but only the affected stream under QUIC.
- *   - Connection establishment latency (Figure 5.12): TCP+TLS vs QUIC 1-RTT
- *     vs QUIC 0-RTT, counting the round-trips before the first app data.
+ *   - Connection establishment latency (Figure 5.12): TCP+TLS (legacy contrast)
+ *     vs QUIC 1-RTT — the transport Lean Consensus actually uses. 0-RTT is
+ *     omitted: the leanSpec reference disables early data / session resumption
+ *     (early_data_accepted=False), so 1-RTT is the canonical handshake.
  *
  * Press リプレイ to restart the animation; toggle パケットロス to remove A#3.
  */
@@ -28,8 +30,10 @@
       あるパケットが落ちると、後続が全ストリーム分まとめて止まる(配信待ち)。
       QUIC はストリームをトランスポートの第一級要素にし、損失を <i>そのストリームだけ</i> に隔離する。
       → 下のアニメで A#3 を落とすと、TCP は B も止まるが QUIC は B が止まらない。</p>
-      <p><b>② 接続確立の RTT:</b> TCP+TLS1.3 はハンドシェイクが層状に積み重なり数 RTT かかる。
-      QUIC は TLS1.3 を統合し 1-RTT、セッション再開なら 0-RTT で即データ送信。</p>
+      <p><b>② 接続確立の RTT:</b> TCP+TLS1.3 はハンドシェイクが層状に積み重なり数 RTT かかる(比較用)。
+      <b>Lean Consensus は QUIC をそのまま採用</b>し、TLS1.3 を統合した <b>1-RTT</b> でハンドシェイクを終える
+      — これが本線の唯一のトランスポート。(QUIC 一般の 0-RTT=セッション再開は、leanSpec 参照実装では
+      early data を無効化しており本線では使わない。)</p>
       <p>(QUIC はさらに Connection ID による経路移行、既定で認証・暗号化、という利点も持つ — 5.3.2)</p>
       <p><b>操作:</b> 上のボタンで2つの比較を切り替え。リプレイで再生。</p>`,
 
@@ -125,10 +129,16 @@
     /* ------------------------- RTT scenario ------------------------- */
     buildRtt() {
       // Each message: t in one-way units, dir 1 = client->server, -1 = server->client.
+      // Lean Consensus uses QUIC (TLS 1.3 integrated) as its sole transport — a
+      // 1-RTT handshake. TCP+TLS is shown only as the legacy contrast; 0-RTT is
+      // omitted because the leanSpec reference disables early data / session
+      // resumption (early_data_accepted=False) to avoid replay.
       this.rttLanes = [
         {
           title: "TCP + TLS 1.3",
+          subtitle: "比較用 — Lean Consensus では不採用",
           color: colors.prune,
+          adopted: false,
           messages: [
             { t: 0, dir: 1, label: "SYN" },
             { t: 1, dir: -1, label: "SYN-ACK" },
@@ -142,7 +152,9 @@
         },
         {
           title: "QUIC (1-RTT)",
+          subtitle: "Lean Consensus の採用トランスポート",
           color: colors.graft,
+          adopted: true,
           messages: [
             { t: 0, dir: 1, label: "Initial + ClientHello" },
             { t: 1, dir: -1, label: "ServerHello + Finished" },
@@ -150,13 +162,6 @@
           ],
           firstData: 2,
           rtt: 1,
-        },
-        {
-          title: "QUIC (0-RTT)",
-          color: colors.nodeHasMessage,
-          messages: [{ t: 0, dir: 1, label: "Initial + 0-RTT Data" }],
-          firstData: 0,
-          rtt: 0,
         },
       ];
     },
@@ -320,17 +325,24 @@
     renderRttLane(ctx, lane, x0, laneWidth) {
       const clientX = x0 + laneWidth * 0.22;
       const serverX = x0 + laneWidth * 0.78;
-      const top = 60;
-      const unitHeight = (this.height - 140) / 6;
+      const top = 80;
+      const unitHeight = (this.height - 160) / 6;
 
-      // Panel + title.
+      // Panel + title. The adopted (QUIC) lane gets a highlighted border + ★ badge.
       ctx.save();
       draw.roundedRect(ctx, x0 + 6, 16, laneWidth - 12, this.height - 60, 10);
-      ctx.fillStyle = colors.panel;
+      ctx.fillStyle = lane.adopted ? "#10202b" : colors.panel;
       ctx.fill();
+      if (lane.adopted) {
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = lane.color;
+        ctx.stroke();
+      }
       ctx.restore();
-      draw.label(ctx, lane.title, x0 + laneWidth / 2, 34, lane.color, "bold 13px ui-monospace, monospace");
+      const badge = lane.adopted ? "★ " : "";
+      draw.label(ctx, badge + lane.title, x0 + laneWidth / 2, 34, lane.color, "bold 14px ui-monospace, monospace");
       draw.label(ctx, `handshake: ${lane.rtt}-RTT`, x0 + laneWidth / 2, 50, colors.textDim, "11px ui-monospace, monospace");
+      draw.label(ctx, lane.subtitle, x0 + laneWidth / 2, 66, lane.adopted ? lane.color : colors.textDim, "11px ui-monospace, monospace");
 
       // Client / server vertical lines.
       draw.line(ctx, clientX, top, clientX, this.height - 50, colors.grid, 1.4, false);
@@ -381,9 +393,9 @@
       return [
         { label: "表示", value: "ハンドシェイク RTT" },
         { label: "経過 (one-way)", value: this.clock.toFixed(1) },
-        { label: "TCP+TLS", value: "3-RTT" },
-        { label: "QUIC", value: "1-RTT" },
-        { label: "QUIC (再開)", value: "0-RTT" },
+        { label: "採用 (Lean Consensus)", value: "QUIC 1-RTT" },
+        { label: "比較: TCP+TLS", value: "3-RTT" },
+        { label: "0-RTT", value: "無効 (early data 不使用)" },
       ];
     },
 
