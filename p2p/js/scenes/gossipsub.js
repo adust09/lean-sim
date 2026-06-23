@@ -37,6 +37,13 @@
         <code>GRAFT</code> で勧誘、多すぎ(&gt;D_high)なら <code>PRUNE</code> で切り離す。</li>
         <li><b>重複排除</b>: 既に持つメッセージの2通目以降は破棄（赤の点滅）。</li>
       </ul>
+      <p><b>leanSpec のパラメータ (gossipsub/parameters.py):</b> Gossipsub
+      <b>v1.2</b> (<code>/meshsub/1.2.0</code>, IDONTWANT 帯域最適化付き)、
+      D=8 / D_low=6 / D_high=12 / D_lazy=6、heartbeat 0.7s。トピックは
+      <code>/leanconsensus/{fork_digest}/{name}/ssz_snappy</code> 形式で、
+      name は <code>block</code> / <code>attestation_{subnet}</code> /
+      <code>aggregation</code>。<b>同一ネットワーク(fork)の判定はこのトピック名に
+      埋め込まれた fork_digest で行われる</b>(Status メッセージではなく)。</p>
       <p><b>操作のヒント:</b></p>
       <ul>
         <li>ノードをクリック → そこからブロックを発行。緑が mesh を伝って一気に広がる。</li>
