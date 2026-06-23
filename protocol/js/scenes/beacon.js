@@ -110,11 +110,19 @@
     aggregatedThisSlot: false,
     safeTargetThisSlot: false,
     acceptedThisSlot: false,
+    upsilonOverlay: 0,         // I0 fade for the Υ state-transition anatomy overlay
+    anatomyState: null,        // reused State/Block field layout (P2P.stateAnatomy)
+    anatomyBlock: null,
 
     /* ------------------------- lifecycle ------------------------- */
     init(env) {
       this.width = env.width;
       this.height = env.height;
+      // Reuse the state scene's anatomy layout for the I0 Υ motion, if loaded.
+      if (P2P.stateAnatomy) {
+        this.anatomyState = P2P.stateAnatomy.buildStateFields();
+        this.anatomyBlock = P2P.stateAnatomy.buildBlockFields();
+      }
       this.build();
     },
     resize(width, height) {
@@ -143,6 +151,7 @@
       this.headMoveFrom = null;
       this.headMoveTo = null;
       this.headMoveProgress = 1;
+      this.upsilonOverlay = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
       this.aggregatedThisSlot = false;
@@ -412,6 +421,10 @@
       this.acceptPulse = Math.max(0, this.acceptPulse - dt / INTERVAL_DURATION);
       if (this.headMoveTo) this.headMoveProgress = Math.min(1, this.headMoveProgress + dt / INTERVAL_DURATION);
 
+      // I0 Υ anatomy overlay: fade in while the transition runs, out afterwards.
+      const upsilonActive = this.interval === 0 && this.proposedThisSlot;
+      this.upsilonOverlay = util.clamp(this.upsilonOverlay + (upsilonActive ? 1 : -1) * dt / 0.4, 0, 1);
+
       // I3 — the aggregate bundle flies to the chain; the weight bar fills to the
       // leading branch's vote count (so a 60/40 split visibly stalls below 2/3).
       const survivingBundles = [];
@@ -454,9 +467,83 @@
       draw.clear(ctx, this.width, this.height);
       this.renderClock(ctx);
       this.renderNetwork(ctx);
+      this.renderUpsilonAnatomy(ctx); // I0 Υ state-transition motion over the mesh
       this.renderAggregatePanel(ctx);
       this.renderUpsilonPipeline(ctx);
       this.renderChain(ctx);
+    },
+
+    /** Build an anatomy-data-compatible view of the block processed at I0, so the
+     *  state scene's State/Block renderers can show Υ's flow here. */
+    buildUpsilonAnatomyView(phaseIndex) {
+      const block = this.lastProcessedBlock || {};
+      const parent = block.parent || null;
+      const included = block.included || [];
+      const attestations = included.map((agg, i) => ({
+        index: i,
+        sourceSlot: this.fork.latestJustified.slot,
+        targetSlot: agg.target ? agg.target.slot : (block.slot || this.currentSlot),
+        voteCount: agg.votes || 0,
+        status: "counted",
+      }));
+      const slot = block.slot != null ? block.slot : this.currentSlot;
+      return {
+        stateFields: this.anatomyState,
+        blockFields: this.anatomyBlock,
+        fieldHitBoxes: [],
+        hoveredFieldKey: null,
+        selectedFieldKey: null,
+        finalVerdict: "pending",
+        currentPhaseIndex: phaseIndex,
+        stateSnapshot: { slot: parent ? parent.slot : Math.max(0, slot - 1) },
+        currentState: {
+          slot,
+          latestBlockHashHex: parent ? parent.root : "—",
+          latestFinalizedSlot: this.fork.latestFinalized.slot,
+          latestJustifiedSlot: this.fork.latestJustified.slot,
+          totalValidators: this.validatorCount,
+          justifiedVotes: included.reduce((sum, agg) => sum + (agg.votes || 0), 0),
+        },
+        blockData: {
+          slot,
+          proposerIndex: block.proposerIndex != null ? block.proposerIndex : 0,
+          parentRoot: parent ? parent.root : "—",
+          stateRoot: block.root || "—",
+          bodyRoot: block.root || "—",
+        },
+        scenario: { proposerValid: true, parentRootValid: true, stateRootValid: true },
+        attestations,
+      };
+    },
+
+    /** I0 Υ motion: overlay the State container + Block + per-phase field flow
+     *  (reusing the state scene's anatomy renderers) over the mesh while Υ runs. */
+    renderUpsilonAnatomy(ctx) {
+      if (this.upsilonOverlay <= 0.01 || !P2P.stateAnatomy || !this.anatomyState) return;
+      const phase = util.clamp(Math.floor(this.slotTimer / (INTERVAL_DURATION / 4)), 0, 3);
+      const view = this.buildUpsilonAnatomyView(phase);
+      const x = this.netLeft();
+      const y = this.netTop();
+      const w = this.netRight() - this.netLeft();
+      const h = this.netBottom() - this.netTop();
+
+      // Dim backdrop so the overlay reads clearly while the mesh shows faintly.
+      ctx.save();
+      ctx.globalAlpha = this.upsilonOverlay * 0.85;
+      draw.roundedRect(ctx, x - 6, y - 4, w + 12, h + 12, 10);
+      ctx.fillStyle = "#0b0f17";
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      ctx.globalAlpha = this.upsilonOverlay;
+      draw.label(ctx, `状態遷移 Υ(S,B) — ${UPSILON_PHASES[phase]}`, x + w / 2, y + 6,
+        colors.nodeActive, "bold 11px ui-monospace, monospace");
+      const colGap = 12;
+      const colWidth = (w - colGap) / 2;
+      P2P.stateAnatomy.renderStateContainer(ctx, view, x, y + 16, colWidth, h - 22);
+      P2P.stateAnatomy.renderBlockContainer(ctx, view, x + colWidth + colGap, y + 16, colWidth, h - 22);
+      ctx.restore();
     },
 
     renderClock(ctx) {
