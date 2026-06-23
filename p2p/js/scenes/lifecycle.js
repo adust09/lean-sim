@@ -55,7 +55,7 @@
       label: "接続",
       section: "5.3",
       sceneKey: "quic",
-      narration: "見つけたピアへ QUIC で接続。TLS を統合し 1-RTT(セッション再開なら 0-RTT)で即データを送れる。",
+      narration: "見つけたピアへ QUIC で接続。TLS1.3 を統合した 1-RTT で即データを送れる(Lean Consensus の採用トランスポート)。",
       onEnter() {
         const scene = P2P.scenes.quic;
         scene.view = "rtt";
