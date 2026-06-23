@@ -540,7 +540,7 @@
     /** The aggregate object being built this slot (§6.4 / Fig 6.4): AttestationData + bitfield + N→1. */
     renderAggregatePanel(ctx) {
       const x = this.netRight() + 20;
-      const y = this.netTop() + 144;
+      const y = this.netTop() + 220; // below the Υ state-transition panel
       const width = this.width - x - 28;
       const height = 152;
       if (width < 190 || y + height > this.height - 170) return;
@@ -590,7 +590,7 @@
     /** Υ state transition pipeline (§4.3): a 4-phase strip lighting up 1→4 as the I0 block is processed. */
     renderUpsilonPipeline(ctx) {
       const x = this.netRight() + 20;
-      const y = this.netTop() + 304;
+      const y = this.netTop() + 144; // above the aggregate panel
       const width = this.width - x - 28;
       if (width < 300 || y + 64 > this.height - 150) return;
       const active = this.interval === 0 && this.proposedThisSlot;
