@@ -25,7 +25,7 @@
   const scene = {
     id: "pipeline",
     title: "SSZ パイプライン",
-    sectionRef: "2.3–2.5",
+    sectionRef: "ssz/ · merkleization.py",
     descriptionHTML: `
       <p><b>SSZ を構造からハッシュツリールート、証明まで1本の流れで (§2.3–2.5)。</b>
       コンテナを選ぶと、それが上から下へ各ステージを通る。</p>
@@ -34,7 +34,9 @@
         <li><b>② シリアライズ (§2.3):</b> 固定/ネストはインライン、可変(List/Bitlist)は
         4バイトの <b>offset</b> を残し実データを<b>可変部</b>へ。リスト長が変わっても固定位置は不変。</li>
         <li><b>③ マークル化 (§2.4):</b> 各フィールドの hash_tree_root が葉(2の冪へ <b>zero-padding</b>)。
-        ペアを下へハッシュして <code>hash_tree_root</code> に至る。</li>
+        ペアを下へハッシュして <code>hash_tree_root</code> に至る。実装(<code>crypto/merkleization.py</code>)の
+        ハッシュは <b>SHA-256</b>(32B チャンク)。本図は見やすさのため疑似ハッシュ(4桁hex)で表示。
+        ※ XMSS 署名内部は Poseidon/KoalaBear で、SSZ merkleization の SHA-256 とは別。</li>
         <li><b>④ 証明・検証 (§2.5):</b> <code>gindex = 2<sup>depth</sup> + position</code>。
         対象葉の<b>兄弟(witness)</b>でルートを再計算して照合。</li>
       </ol>

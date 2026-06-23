@@ -1,59 +1,75 @@
 /*
- * slotclock.js — Section 3.1–3.3: The Slot Clock.
+ * slotclock.js — The Slot Clock.
+ * Reference: spec/forks/lstar/config.py (INTERVALS_PER_SLOT=5, 800 ms/interval),
+ *            node/chain/clock.py (current_slot / current_interval),
+ *            spec/forks/lstar/timeline.py (tick_interval interval actions).
  *
  * A live, continuously-advancing clock that maps wall-clock time to slot
  * number and interval index.  Two synchronized views are rendered:
  *
- *   1. A horizontal slot grid (like Fig 3.1): slot boxes sweep left as time
- *      advances; a "now" marker shows the current position.
- *   2. A within-slot interval view (like Fig 3.2): the current slot is split
- *      into 4 one-second interval segments; the active segment glows.
+ *   1. A horizontal slot grid: slot boxes sweep left as time advances; a
+ *      "now" marker shows the current position.
+ *   2. A within-slot interval view: the current slot is split into 5 equal
+ *      800 ms interval segments; the active segment glows.
  *
- * A live formula readout (like Fig 3.4) shows:
- *   t → Δ = t − tg → slot = ⌊Δ/Ts⌋, interval = ⌊(Δ mod Ts)/Ti⌋
+ * A live formula readout shows:
+ *   t → Δ = t − tg → slot = ⌊Δ/Ts⌋, interval = ⌊(Δ mod Ts)/Ti⌋  (0–4)
  */
 "use strict";
 
 (function registerSlotClock() {
   const { util, draw, colors, ease } = P2P;
 
-  /* Interval metadata — roles match the chapter spec exactly. */
+  /* Interval roles per timeline.py `tick_interval`. Block proposal is NOT an
+   * interval-driven action — the proposer broadcasts at slot start; intervals
+   * are the fork-choice processing points within the slot. */
   const INTERVAL_ROLES = [
-    "ブロック提案",
-    "投票生成",
+    "投票受理（提案着弾）",
+    "待機",
+    "署名集約",
     "セーフターゲット更新",
     "投票受理",
   ];
 
   /* Visual accent per interval: matching role semantics with color. */
   const INTERVAL_COLORS = [
-    colors.nodeSource,   // amber — proposer action
-    colors.nodeActive,   // blue  — attestation broadcast
-    colors.graft,        // cyan  — safe target (stabilise view)
-    colors.nodeHasMessage, // green — votes accepted into fork choice
+    colors.nodeHasMessage, // green — accept_new_attestations (proposal landed)
+    colors.textDim,        // dim   — no action (votes propagate)
+    colors.nodeSource,     // amber — aggregate (aggregators bundle proofs)
+    colors.graft,          // cyan  — update_safe_target (fast confirmation)
+    colors.nodeHasMessage, // green — accept_new_attestations (end of slot)
   ];
 
   const scene = {
     id: "slotclock",
     title: "スロットクロック",
-    sectionRef: "3.1",
+    sectionRef: "config.py · clock.py",
     descriptionHTML: `
       <p><b>スロットクロック</b>はジェネシス時刻 t<sub>g</sub> と現在時刻 t から
       スロット番号とインターバル番号を導出する純粋な計算式です。</p>
       <ul>
-        <li>スロット時間 <b>Ts = 4 秒</b>、インターバル時間 <b>Ti = 1 秒</b>。</li>
+        <li>スロット時間 <b>Ts = 4 秒</b>、1 スロット = <b>5 インターバル</b>
+          (<code>INTERVALS_PER_SLOT=5</code>)、インターバル時間 <b>Ti = 800 ms</b>。</li>
         <li>オフセット <b>Δ(t) = t − t<sub>g</sub></b></li>
         <li>スロット番号 = ⌊Δ / Ts⌋</li>
-        <li>インターバル番号 = ⌊(Δ mod Ts) / Ti⌋</li>
+        <li>インターバル番号 = ⌊(Δ mod Ts) / Ti⌋（0–4）</li>
       </ul>
       <p>スロット 0 は<b>ジェネシススロット</b>：提案者なし、親なし。
       ジェネシス状態は定義上 justified + finalized とみなされます。</p>
-      <p><b>各インターバルの役割（Fig 3.2）:</b></p>
+      <p><b>ブロック提案はインターバル駆動ではありません</b>。提案者は各スロット先頭で
+      準備でき次第ブロックをブロードキャストします。インターバルはフォークチョイス
+      処理の実行点で、<code>timeline.py</code> の <code>tick_interval</code> が
+      各点で次を行います:</p>
       <ul>
-        <li><b>Interval 0</b> — ブロック提案（提案者がブロックをブロードキャスト）</li>
-        <li><b>Interval 1</b> — 投票生成（バリデータがアテステーションを送出; PENDING 状態）</li>
-        <li><b>Interval 2</b> — セーフターゲット更新（⅔ 超過多数を持つ最新ブロックを確定; フォークチョイス前の安定化）</li>
-        <li><b>Interval 3</b> — 投票受理（PENDING → KNOWN に昇格; フォークチョイスに投入してヘッドを再計算）</li>
+        <li><b>Interval 0</b> — 投票受理：提案が着弾したら保留中の票を取り込む
+          (<code>accept_new_attestations</code>, has_proposal 時)</li>
+        <li><b>Interval 1</b> — 待機（アクションなし。票がネットワークに伝搬する猶予）</li>
+        <li><b>Interval 2</b> — 署名集約：アグリゲータが票を証明に束ねブロードキャスト
+          (<code>aggregate</code>, アグリゲータのみ)</li>
+        <li><b>Interval 3</b> — セーフターゲット更新：最新票から safe target を前進
+          させ高速確定 (<code>update_safe_target</code>)</li>
+        <li><b>Interval 4</b> — 投票受理：スロット中に蓄積した票を取り込む
+          (<code>accept_new_attestations</code>)</li>
       </ul>`,
 
     /* ---- state ---- */
@@ -62,8 +78,8 @@
     simulatedTime: 0,         // seconds since genesis (t, with tg = 0)
     playbackSpeed: 1,
     isPaused: false,
-    slotDuration: 4,          // Ts in seconds (configurable via slider)
-    intervalDuration: 1,      // Ti fixed at 1 s per spec
+    slotDuration: 4,          // Ts in seconds (fixed: SECONDS_PER_SLOT=4)
+    intervalDuration: 0.8,    // Ti = MILLISECONDS_PER_INTERVAL = 800 ms (5 per slot)
     pulsePhase: 0,            // drives the glow pulse for active interval
 
     /* init is called once; env provides initial logical pixel dimensions. */
@@ -257,7 +273,7 @@
       /* Header */
       draw.label(
         ctx,
-        `現在スロット内インターバル（スロット ${this.currentSlot()} · Ts = ${this.slotDuration}s, Ti = 1s, ${count} intervals）`,
+        `現在スロット内インターバル（スロット ${this.currentSlot()} · Ts = ${this.slotDuration}s, Ti = 0.8s, ${count} intervals）`,
         barLeft,
         top + 10,
         colors.textDim,
@@ -271,8 +287,7 @@
         const boxLeft = barLeft + intervalIndex * intervalPixelWidth;
         const isActive = intervalIndex === activeIntervalIndex;
 
-        /* Determine role label: only 4 canonical roles; extra intervals
-         * (when Ts > 4s) show a generic "追加インターバル" label. */
+        /* All 5 intervals have a fixed fork-choice role (timeline.py). */
         const roleLabel = INTERVAL_ROLES[intervalIndex] || `追加インターバル ${intervalIndex}`;
         const intervalAccent = INTERVAL_COLORS[intervalIndex] || colors.textDim;
 
@@ -307,8 +322,8 @@
           `${isActive ? "bold " : ""}11px ui-monospace, monospace`,
         );
 
-        /* Role label — only the 4 canonical ones are shown */
-        if (intervalIndex < 4) {
+        /* Role label — all 5 intervals carry a fork-choice role */
+        if (intervalIndex < INTERVAL_ROLES.length) {
           draw.label(
             ctx,
             roleLabel,
@@ -366,7 +381,7 @@
         `t = ${this.simulatedTime.toFixed(2)} s  →  ` +
         `Δ = ${slotOffset.toFixed(2)} s  →  ` +
         `slot = ⌊${this.simulatedTime.toFixed(2)} / ${this.slotDuration}⌋ = ${slotNumber}  ·  ` +
-        `interval = ⌊${slotOffset.toFixed(2)} mod ${this.slotDuration} / 1⌋ = ${intervalIndex}`;
+        `interval = ⌊${slotOffset.toFixed(2)} / ${this.intervalDuration}⌋ = ${intervalIndex}`;
 
       draw.label(
         ctx,
@@ -403,7 +418,7 @@
         { label: "Δ = t − tg (s)", value: slotOffset.toFixed(2) },
         { label: "現在スロット", value: slotNumber },
         { label: "現在インターバル", value: `${intervalIndex} — ${roleLabel}` },
-        { label: "Ts / Ti", value: `${this.slotDuration}s / 1s = ${count}` },
+        { label: "Ts / Ti", value: `${this.slotDuration}s / 0.8s = ${count}` },
         { label: "再生速度", value: `×${this.playbackSpeed}` },
         { label: "状態", value: this.isPaused ? "一時停止" : "再生中" },
       ];
@@ -434,17 +449,12 @@
       container.appendChild(playbackGroup);
 
       const timingGroup = ui.group("タイミングパラメータ");
-      timingGroup.appendChild(
-        ui.slider(
-          "スロット時間 Ts (s)",
-          2, 12, 1, this.slotDuration,
-          (value) => {
-            this.slotDuration = value;
-            /* Reset so the new Ts takes effect cleanly from genesis. */
-            this.reset();
-          },
-        ),
-      );
+      const timingNote = document.createElement("div");
+      timingNote.style.fontSize = "11px";
+      timingNote.style.color = colors.textDim;
+      timingNote.style.lineHeight = "1.5";
+      timingNote.textContent = "Ts = 4s 固定 · 1 スロット = 5 インターバル × 800ms (INTERVALS_PER_SLOT=5)";
+      timingGroup.appendChild(timingNote);
       container.appendChild(timingGroup);
     },
   };

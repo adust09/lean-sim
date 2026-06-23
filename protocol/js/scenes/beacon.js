@@ -3,7 +3,7 @@
  * now including fork scenarios (§6.3) on a fork TREE with LMD-GHOST.
  *
  * One screen tying every chapter together on the per-slot heartbeat:
- *   §3 Time      — the slot clock and its four intervals drive the cycle.
+ *   §3 Time      — the slot clock and its five intervals drive the cycle.
  *   §5 P2P       — a proposed block propagates across a validator mesh.
  *   §6 Consensus — validators attest (pending→accepted); votes aggregate;
  *                  a 2/3 supermajority justifies; GHOST picks the head; forks
@@ -19,16 +19,20 @@
 (function registerBeacon() {
   const { util, draw, colors, ease } = P2P;
 
-  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (4 intervals of 3s)
-  const INTERVAL_COUNT = 4;
+  const SLOT_DURATION = 12.0; // real cadence: 12s per slot (5 intervals of 2.4s)
+  const INTERVAL_COUNT = 5;   // INTERVALS_PER_SLOT (config.py)
+  // Per-interval wall-time at speed 1 (12s / 5 = 2.4s). Every interval's motion
+  // is sized to this so it finishes exactly when the interval ends.
+  const INTERVAL_DURATION = SLOT_DURATION / INTERVAL_COUNT;
   const BRANCH_COLOR = ["#2f6df6", "#f6a52f"]; // group 0 / group 1 during a fork
 
-  // The four-interval slot pipeline (spec §3.2.1 / Fig 3.2).
+  // The five-interval slot pipeline — action points per timeline.py tick_interval.
   const INTERVAL_NARRATION = [
-    "Interval 0 — Block Proposal: proposer が Υ を実行しブロックと state_root を生成・配信。各ノードが Υ を再実行し照合、前スロットの集約票で justification を確定 (§4.3)。",
-    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留。aggregator が並行して集約 (§6.4)。",
-    "Interval 2 — Safe Target Update: 票を数える前に、直近で 2/3 を集めたブロック (セーフターゲット) を確定し視点を安定化。",
-    "Interval 3 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (§6.3)。",
+    "Interval 0 — 提案着弾 / 前票受理: proposer がブロックと state_root を配信。各ノードが Υ(§4.3) を再実行し照合し、前スロットの保留集約票を受理して justification を確定 (accept_new_attestations)。",
+    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留(この区間は処理点なし=票がネットワークに伝搬する猶予)。",
+    "Interval 2 — 署名集約: aggregator が今スロットの票を1本の証明に束ねブロードキャスト (§6.4 aggregate)。",
+    "Interval 3 — Safe Target Update: 直近で 2/3 を集めたブロック (セーフターゲット) を確定し高速確定の視点を安定化 (update_safe_target)。",
+    "Interval 4 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (§6.3 accept_new_attestations)。",
   ];
 
   // Υ's 4-phase transition pipeline, run when a block is processed at I0 (§4.3).
@@ -37,19 +41,23 @@
   const scene = {
     id: "beacon",
     title: "ビーコンチェーン稼働",
-    sectionRef: "2–6",
+    sectionRef: "forks/lstar/",
     descriptionHTML: `
-      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 4つのインターバル(§3)が毎スロットを駆動する:</p>
+      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 5つのインターバル(§3)が毎スロットを駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案 (I0):</b> proposer がブロックを作り伝播 (§5)。同時に <b>状態遷移 Υ</b>(§4.3 の4フェーズ)を proposer が算出→各ノードが再実行し <code>state_root</code> 照合。前スロットの集約票をここで適用し justification 確定。</li>
-        <li><b>投票 (I1):</b> 検証者が attestation を配信。票は <b>pending</b>(保留)。aggregator が同一票を1本 <code>Sagg</code> に集約 (§6.4 / 右パネル)。</li>
-        <li><b>セーフターゲット (I2):</b> 直近で 2/3 を集めたブロックを確定し視点を安定化。</li>
-        <li><b>受理 (I3):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
+        <li><b>提案/受理 (I0):</b> proposer がブロックを作り伝播 (§5)。<b>状態遷移 Υ</b>(§4.3 の4フェーズ)を各ノードが再実行し <code>state_root</code> 照合。前スロットの保留集約票をここで受理し justification 確定 (accept_new_attestations)。</li>
+        <li><b>投票 (I1):</b> 検証者が attestation を配信。票は <b>pending</b>(保留)。処理点なし。</li>
+        <li><b>集約 (I2):</b> aggregator が同一票を1本 <code>Sagg</code> に集約 (§6.4 aggregate / 右パネル)。</li>
+        <li><b>セーフターゲット (I3):</b> 直近で 2/3 を集めたブロックを確定し視点を安定化 (update_safe_target)。</li>
+        <li><b>受理 (I4):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
       </ol>
-      <p><b>2つの軸:</b> I0–I3 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
-      <p><b>フォーク (§6.3):</b> シナリオを選ぶとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。<b>一時的フォーク</b>=票が割れ収束し軽い枝は reorg。<b>分断(60/40)</b>=各群が別枝を伸ばし、どちらも 2/3 未達で<b>finality 停止</b>、回復で重い枝が勝つ。<b>二重提案</b>=equivocation 枝は枯れる。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
-      <p><b>深いリオルグ (秘匿枝の後出し):</b> 結託した多数派(群0 ≈60%)が slot3 で<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1 ≈40%)に公開チェーンを伸ばさせたまま、裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。slot7 で秘匿枝を<b>後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
-      <p><b>操作:</b> シナリオ・参加率・検証者数・速度を変更可。「1スロット進める」で1歩ずつ。</p>
+      <p><b>2つの軸:</b> I0–I4 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
+      <p><b>フォーク (§6.3) — パラメータで再現:</b> 下のトグルと参加率を切り替えるとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。
+      <b>参加率 &lt; 67%</b> = 2/3 未達で <b>finality 停止</b>(ブロックは生成され続ける)。
+      <b>二重提案 (equivocation)</b> = 提案者が2ブロックを出し票が割れ、軽い枝は reorg(ON→OFF の一瞬で「一時的フォーク」)。
+      <b>ネットワーク分断</b> = 各群が別枝を伸ばし、どちらも 2/3 未達で停止、OFF(回復)で重い枝が勝つ。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
+      <p><b>深いリオルグ (秘匿枝の後出し) — トグル「秘匿枝」:</b> ON にすると結託した多数派(群0)が<b>秘匿枝</b>(紫・破線)を分岐させ、正直な少数派(群1)に公開チェーンを伸ばさせたまま裏で票を貯める(GHOST には見えないので公開枝がヘッドのまま伸びる)。数スロット貯めてから<b>OFF にして後出し公開</b>すると貯めた票が一気に効き、GHOST が秘匿枝に切り替わって分岐以降の正直ブロックを<b>まとめて reorg</b>(統計の「深度」が巻き戻し段数)。ただし多数派でも 2/3 には届かず<b>単独では finalize できない</b>。そして <b>finalized より下は決して巻き戻せない</b>ため、reorg 深度は finality で頭打ちになる — これが 3SF が守るもの。</p>
+      <p><b>操作:</b> フォーク・パラメータ(トグル)/ 参加率 / 検証者数 / 多数派比率 / 速度を変更可。「1スロット進める」で1歩ずつ。</p>
       <p><b>色凡例:</b><br>
       <span style="color:#36d399">●</span> 提案ブロック伝播 / accepted / finalized &nbsp;
       <span style="color:#a78bfa">●</span> attestation→aggregator &nbsp;
@@ -68,8 +76,11 @@
     validators: [],
     mesh: [],
     fork: null,
-    scenario: "normal",
-    scenarioButtons: [],
+    // Fork phenomena are driven by parameters/toggles, not preset scenarios.
+    equivocateOn: false,   // proposer publishes two competing blocks each slot
+    partitionOn: false,    // network split into two groups building separate branches
+    withholdOn: false,     // attacker majority withholds a private branch (reveal on off)
+    majorityFraction: 0.6, // size of group 0 (the larger group used by partition/withhold)
     particles: [],
     attestationDots: [],
     aggregateParticles: [],
@@ -89,8 +100,14 @@
     participation: 0.85,
     votesAccrued: 0,
     safeTargetSlot: 0,
+    safeTargetPulse: 0,        // I3 motion: expanding-ring pulse on the safe block
+    acceptPulse: 0,            // I4 motion: acceptance ripple on accepted nodes
+    headMoveFrom: null,        // I4 motion: GHOST head glide (old head)
+    headMoveTo: null,          //            (new head)
+    headMoveProgress: 1,
     proposedThisSlot: false,
     attestedThisSlot: false,
+    aggregatedThisSlot: false,
     safeTargetThisSlot: false,
     acceptedThisSlot: false,
 
@@ -106,7 +123,7 @@
     },
 
     build() {
-      this.rng = util.makeRng(this.seed * 7919 + this.validatorCount + this.scenario.length);
+      this.rng = util.makeRng(this.seed * 7919 + this.validatorCount);
       this.particles = [];
       this.attestationDots = [];
       this.aggregateParticles = [];
@@ -121,12 +138,22 @@
       this.interval = 0;
       this.votesAccrued = 0;
       this.safeTargetSlot = 0;
+      this.safeTargetPulse = 0;
+      this.acceptPulse = 0;
+      this.headMoveFrom = null;
+      this.headMoveTo = null;
+      this.headMoveProgress = 1;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.aggregatedThisSlot = false;
       this.safeTargetThisSlot = false;
       this.acceptedThisSlot = false;
       this.buildValidators();
       this.fork = P2P.createForkModel(this.validatorCount);
+      // Re-apply the active fork toggles onto the fresh model.
+      this.fork.equivocate = this.equivocateOn;
+      if (this.partitionOn) this.fork.setPartition(true);
+      if (this.withholdOn) this.fork.startWithhold();
     },
 
     buildValidators() {
@@ -150,7 +177,7 @@
         nodes.push({ index: nodes.length, nx: 0.1 + this.rng() * 0.42, ny: 0.12 + this.rng() * 0.72, online: true, hasBlock: false, voteState: "none", group: 0 });
       }
       // The larger group (≈60%) is group 0, the rest group 1 (used by partition).
-      const majoritySize = Math.round(count * 0.6);
+      const majoritySize = Math.round(count * this.majorityFraction);
       nodes.forEach((node, index) => (node.group = index < majoritySize ? 0 : 1));
       this.validators = nodes;
       this.mesh = nodes.map(() => new Set());
@@ -186,7 +213,7 @@
     /* ------------------------- per-slot events ------------------------- */
     proposeBlock() {
       this.proposedThisSlot = true;
-      const proposed = this.fork.proposeSlot(this.scenario, this.currentSlot);
+      const proposed = this.fork.proposeSlot(this.currentSlot);
       this.lastProcessedBlock = proposed[0].block;
       // I0 also processes the new block: Υ applies the aggregates it carries.
       this.processStateTransition(proposed[0].block);
@@ -198,9 +225,13 @@
         block.proposerIndex = proposer.index;
         proposer.hasBlock = true;
         if (block.hidden) continue; // withheld branch is not broadcast — no propagation particles
-        for (const validator of this.validators) {
-          if (validator.index === proposer.index || !validator.online) continue;
-          const duration = 0.5 + util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / 600;
+        // Normalize by the farthest target so the last block lands exactly at I0's end.
+        const targets = this.validators.filter((v) => v.index !== proposer.index && v.online);
+        const maxDist = Math.max(1, ...targets.map((v) => util.distance(this.vx(proposer), this.vy(proposer), this.vx(v), this.vy(v))));
+        for (const validator of targets) {
+          // I0 block propagation: nearer nodes receive earlier; the farthest at I0's end.
+          const reach = util.distance(this.vx(proposer), this.vy(proposer), this.vx(validator), this.vy(validator)) / maxDist;
+          const duration = INTERVAL_DURATION * (0.45 + 0.55 * reach);
           this.particles.push({ fromIndex: proposer.index, toIndex: validator.index, t: 0, duration });
         }
       }
@@ -226,37 +257,73 @@
       this.aggregatorIndex = (this.currentSlot * 13 + 7) % this.validatorCount;
       const head = this.fork.headBlock;
       this.attestTriple = { sourceSlot: this.fork.latestJustified.slot, targetSlot: head.slot };
-      const voters = this.validators.filter((v) => v.online && this.rng() < this.participation);
+      // Participation is a FIXED fraction of each group's online validators, not a
+      // per-validator coin flip. Re-rolling each slot let the vote count vary above
+      // the mean, so a 60% rate could randomly cross 2/3 and finalize. A fixed
+      // count per group keeps 60% of 40 at exactly 24 votes (< the 27 threshold) so
+      // sub-2/3 participation never finalizes. Membership is still shuffled per slot
+      // for visual variety; only the count is pinned.
+      const byGroup = { 0: [], 1: [] };
+      for (const validator of this.validators) {
+        if (validator.online) byGroup[validator.group].push(validator);
+      }
+      const voters = [];
+      for (const group of [0, 1]) {
+        const pool = util.shuffleInPlace(this.rng, [...byGroup[group]]);
+        const take = Math.round(this.participation * pool.length);
+        for (let k = 0; k < take; k++) voters.push(pool[k]);
+      }
       this.voters = voters;
       this.expectedVotes = voters.length;
       for (const voter of voters) {
-        voter.voteTarget = this.fork.voteTargetFor(voter.group, this.scenario);
-        this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: 0.6 + this.rng() * 0.5 });
+        voter.voteTarget = this.fork.voteTargetFor(voter.group);
+        // I1 voting: staggered, but the last dot lands exactly at interval 1's end.
+        this.attestationDots.push({ voterIndex: voter.index, fromX: this.vx(voter), fromY: this.vy(voter), t: 0, duration: INTERVAL_DURATION * (0.6 + 0.4 * this.rng()) });
       }
     },
 
-    /** I2 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
-    updateSafeTarget() {
-      this.safeTargetThisSlot = true;
-      this.safeTargetSlot = this.fork.latestJustified.slot;
-    },
-
-    /** I3 — Attestation Acceptance: votes apply to fork choice (GHOST head moves). */
-    acceptAttestations() {
-      this.acceptedThisSlot = true;
+    /** I2 — Signature Aggregation: the aggregator bundles the slot's pending votes
+     *  into one aggregate (Sagg) and broadcasts it toward the chain. Tallying the
+     *  votes per target happens here; acceptance into fork choice waits for I4. */
+    aggregateVotes() {
+      this.aggregatedThisSlot = true;
       const tally = new Map();
       for (const voter of this.voters || []) {
         if (voter.voteState === "pending" && voter.voteTarget) {
-          voter.voteState = "accepted";
-          voter.voteTarget.weight += 1;
           tally.set(voter.voteTarget, (tally.get(voter.voteTarget) || 0) + 1);
         }
       }
       this.slotTally = tally;
       this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
+      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.netTop() + 404 };
+      // I2 aggregation: the Sagg bundle travels the whole interval, landing at I2's end.
+      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: INTERVAL_DURATION, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
+    },
+
+    /** I3 — Safe Target Update: anchor on the latest block with a 2/3 majority. */
+    updateSafeTarget() {
+      this.safeTargetThisSlot = true;
+      this.safeTargetSlot = this.fork.latestJustified.slot;
+      this.safeTargetPulse = 1; // motion: ring pulse on the anchored safe block
+    },
+
+    /** I4 — Attestation Acceptance: pending votes apply to fork choice (GHOST head moves). */
+    acceptAttestations() {
+      this.acceptedThisSlot = true;
+      const previousHead = this.fork.headBlock;
+      for (const voter of this.voters || []) {
+        if (voter.voteState === "pending" && voter.voteTarget) {
+          voter.voteState = "accepted";
+          voter.voteTarget.weight += 1;
+        }
+      }
       this.fork.recomputeHead();
-      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
-      if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: 0.8, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
+      // motion: ripple over the just-accepted nodes + glide the head marker
+      // from the previous head to the recomputed GHOST head.
+      this.acceptPulse = 1;
+      this.headMoveFrom = previousHead;
+      this.headMoveTo = this.fork.headBlock;
+      this.headMoveProgress = 0;
     },
 
     /** Slot end: each block voted this slot becomes an aggregate, pooled for the
@@ -279,10 +346,14 @@
       this.interval = 0;
       this.proposedThisSlot = false;
       this.attestedThisSlot = false;
+      this.aggregatedThisSlot = false;
       this.safeTargetThisSlot = false;
       this.acceptedThisSlot = false;
+      this.safeTargetPulse = 0;
+      this.acceptPulse = 0;
+      this.headMoveTo = null;
+      this.headMoveProgress = 1;
       this.votesAccrued = 0;
-      this.fork.applyScenarioTransitions(this.scenario, this.currentSlot);
     },
 
     /* ------------------------- update ------------------------- */
@@ -300,8 +371,9 @@
       this.interval = Math.min(INTERVAL_COUNT - 1, Math.floor(this.slotTimer / (SLOT_DURATION / INTERVAL_COUNT)));
       if (this.interval >= 0 && !this.proposedThisSlot) this.proposeBlock();
       if (this.interval >= 1 && !this.attestedThisSlot) this.castAttestations();
-      if (this.interval >= 2 && !this.safeTargetThisSlot) this.updateSafeTarget();
-      if (this.interval >= 3 && !this.acceptedThisSlot) this.acceptAttestations();
+      if (this.interval >= 2 && !this.aggregatedThisSlot) this.aggregateVotes();
+      if (this.interval >= 3 && !this.safeTargetThisSlot) this.updateSafeTarget();
+      if (this.interval >= 4 && !this.acceptedThisSlot) this.acceptAttestations();
     },
 
     advanceParticles(dt) {
@@ -316,7 +388,7 @@
       const aggregator = this.validators[this.aggregatorIndex] || null;
       this.aggX = aggregator ? this.vx(aggregator) : this.netRight();
       this.aggY = aggregator ? this.vy(aggregator) : this.netBottom();
-      this.dotTarget = { x: this.netRight() + 40, y: this.height - 110 };
+      this.dotTarget = { x: this.netRight() + 40, y: this.netTop() + 404 };
 
       // I1 — attestations fold into the aggregator; each marks its voter PENDING.
       const survivingDots = [];
@@ -333,6 +405,12 @@
       }
       this.attestationDots = survivingDots;
       this.aggregatePulse = Math.max(0, this.aggregatePulse - dt * 3.5);
+
+      // I3 / I4 motion timers: ring pulse, acceptance ripple, head glide.
+      // I3 / I4 motions each span exactly one interval so they end on its boundary.
+      this.safeTargetPulse = Math.max(0, this.safeTargetPulse - dt / INTERVAL_DURATION);
+      this.acceptPulse = Math.max(0, this.acceptPulse - dt / INTERVAL_DURATION);
+      if (this.headMoveTo) this.headMoveProgress = Math.min(1, this.headMoveProgress + dt / INTERVAL_DURATION);
 
       // I3 — the aggregate bundle flies to the chain; the weight bar fills to the
       // leading branch's vote count (so a 60/40 split visibly stalls below 2/3).
@@ -359,7 +437,10 @@
       this.auto = false;
       if (!this.proposedThisSlot) this.proposeBlock();
       if (!this.attestedThisSlot) this.castAttestations();
+      // Manual step skips particle travel; mark voters pending so I2 can tally them.
+      for (const voter of this.voters || []) { if (voter.voteState === "none") voter.voteState = "pending"; }
       this.collectedSigs = this.expectedVotes || 0;
+      if (!this.aggregatedThisSlot) this.aggregateVotes();
       if (!this.safeTargetThisSlot) this.updateSafeTarget();
       if (!this.acceptedThisSlot) this.acceptAttestations();
       this.votesAccrued = this.headSlotVotes || 0;
@@ -384,7 +465,7 @@
       const right = this.width - 30;
       const segWidth = (right - left) / INTERVAL_COUNT;
       draw.label(ctx, `Slot ${this.currentSlot}`, left, top + 2, colors.nodeSource, "bold 15px ui-monospace, monospace", "left");
-      const labels = ["I0 提案", "I1 投票", "I2 セーフターゲット", "I3 受理"];
+      const labels = ["I0 提案/受理", "I1 投票", "I2 集約", "I3 safe", "I4 受理"];
       for (let i = 0; i < INTERVAL_COUNT; i++) {
         const x = left + i * segWidth;
         const active = i === this.interval;
@@ -464,6 +545,13 @@
           fill = colors.nodeSource;
           stroke = colors.nodeSource;
         }
+        // I4 acceptance ripple: an expanding ring over each just-accepted node.
+        if (this.acceptPulse > 0.02 && node.voteState === "accepted") {
+          ctx.save();
+          ctx.globalAlpha = this.acceptPulse * 0.7;
+          draw.disc(ctx, x, y, 7 + 12 * (1 - this.acceptPulse), null, colors.nodeHasMessage, 1.6);
+          ctx.restore();
+        }
         draw.disc(ctx, x, y, 7, fill, stroke, 1.4);
       }
       draw.label(ctx, "検証者メッシュ (§5)" + (this.fork.partitioned ? " — 2群に分断 (青60/橙40)" : ""), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
@@ -476,7 +564,7 @@
     /** The aggregate object being built this slot (§6.4 / Fig 6.4): AttestationData + bitfield + N→1. */
     renderAggregatePanel(ctx) {
       const x = this.netRight() + 20;
-      const y = this.netTop() + 144;
+      const y = this.netTop() + 220; // below the Υ state-transition panel
       const width = this.width - x - 28;
       const height = 152;
       if (width < 190 || y + height > this.height - 170) return;
@@ -526,7 +614,7 @@
     /** Υ state transition pipeline (§4.3): a 4-phase strip lighting up 1→4 as the I0 block is processed. */
     renderUpsilonPipeline(ctx) {
       const x = this.netRight() + 20;
-      const y = this.netTop() + 304;
+      const y = this.netTop() + 144; // above the aggregate panel
       const width = this.width - x - 28;
       if (width < 300 || y + 64 > this.height - 150) return;
       const active = this.interval === 0 && this.proposedThisSlot;
@@ -543,7 +631,7 @@
         ? `Υ(S,B) §4.3 — proposer#${this.proposerForGroup(0).index} 算出 → ${reVerified}/${this.onlineCount()} ノード再実行・state_root 照合✓`
         : "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)";
       draw.label(ctx, title, x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 10px ui-monospace, monospace", "left");
-      const phase = active ? util.clamp(Math.floor(this.slotTimer / 0.5), 0, 4) : -1;
+      const phase = active ? util.clamp(Math.floor(this.slotTimer / (INTERVAL_DURATION / 4)), 0, 4) : -1;
       const chipWidth = (width - 24 - 18) / 4;
       for (let i = 0; i < UPSILON_PHASES.length; i++) {
         const cx = x + 12 + i * (chipWidth + 6);
@@ -570,15 +658,44 @@
 
     /** The bottom area: the fork tree (§6.3 / GHOST) plus the per-slot weight bar. */
     renderChain(ctx) {
-      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${P2P.forkScenarios[this.scenario].label}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
-      const box = { x: 30, y: this.height - 172, width: this.width - 410, height: 92 };
+      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${this.modeLabel()}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
+      // The vote gauge moved up into the right column, so the bottom row is free:
+      // extend the tree to full width — unless a short canvas drops the chain
+      // level with the right-column panels, in which case stop before them.
+      const chainTop = this.height - 172;
+      const panelsBottom = this.netTop() + 412; // gauge bottom in the right column
+      const rightLimit = chainTop >= panelsBottom ? this.width - 30 : this.netRight() - 10;
+      const box = { x: 30, y: chainTop, width: rightLimit - 30, height: 92 };
       this.fork.renderTree(ctx, box);
-      // I2 safe-target highlight on the anchored (latest justified) block.
+      // I3 safe-target motion: expanding-ring pulse + badge on the anchored block.
       const safe = this.fork.latestJustified;
       if (this.safeTargetThisSlot && safe.slot >= this.fork.visibleMinSlot()) {
-        draw.label(ctx, "◆ safe", this.fork.blockX(safe, box), this.fork.blockY(safe, box) - 22, colors.nodeActive, "9px ui-monospace, monospace");
+        const sx = this.fork.blockX(safe, box);
+        const sy = this.fork.blockY(safe, box);
+        if (this.safeTargetPulse > 0.01) {
+          ctx.save();
+          ctx.globalAlpha = this.safeTargetPulse;
+          draw.disc(ctx, sx, sy, util.lerp(10, 30, 1 - this.safeTargetPulse), null, colors.nodeActive, 2);
+          ctx.restore();
+        }
+        draw.label(ctx, "◆ safe target", sx, sy - 22, colors.nodeActive, "9px ui-monospace, monospace");
       }
-      this.renderWeightBar(ctx, this.width - 366, this.height - 92);
+
+      // I4 acceptance motion: glide a head marker from the old head to the
+      // recomputed GHOST head, then hold it there for the rest of the slot.
+      if (this.acceptedThisSlot && this.headMoveTo && this.headMoveTo.slot >= this.fork.visibleMinSlot()) {
+        const fromBlock = (this.headMoveFrom && this.headMoveFrom.slot >= this.fork.visibleMinSlot())
+          ? this.headMoveFrom : this.headMoveTo;
+        const f = ease.inOutCubic(util.clamp(this.headMoveProgress, 0, 1));
+        const hx = util.lerp(this.fork.blockX(fromBlock, box), this.fork.blockX(this.headMoveTo, box), f);
+        const hy = util.lerp(this.fork.blockY(fromBlock, box), this.fork.blockY(this.headMoveTo, box), f);
+        draw.glow(ctx, hx, hy, 15 + 8 * this.acceptPulse, colors.nodeHasMessage);
+        draw.disc(ctx, hx, hy, 5, null, colors.nodeHasMessage, 1.8);
+        draw.label(ctx, "▶ GHOST head", hx, hy - 22, colors.nodeHasMessage, "9px ui-monospace, monospace");
+      }
+
+      // Voting gauge sits in the right column, directly under the aggregate panel.
+      this.renderWeightBar(ctx, this.netRight() + 20, this.netTop() + 396);
     },
 
     renderWeightBar(ctx, x, y) {
@@ -603,15 +720,25 @@
 
     onMouse() {},
 
+    /** A live description of the active fork parameters (replaces named scenarios). */
+    modeLabel() {
+      const active = [];
+      if (this.fork.partitioned) active.push("分断");
+      if (this.equivocateOn) active.push("二重提案");
+      if (this.fork.attacking) active.push("秘匿構築中");
+      if (this.participation < 2 / 3) active.push("低参加(確定停止)");
+      return active.length ? active.join(" + ") : "正常";
+    },
+
     /* ------------------------- stats ------------------------- */
     getStats() {
-      const phase = ["提案", "投票 (pending)", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
+      const phase = ["提案/受理", "投票 (pending)", "集約", "セーフターゲット", "受理 (accepted)"][this.interval] || "—";
       const memo = new Map();
       const branchWeights = this.fork.tips().map((t) => this.fork.subtreeWeight(t, memo)).sort((a, b) => b - a);
       const state = this.fork.partitioned ? "分断中" : this.fork.attacking ? "秘匿構築中" : this.fork.competing ? "フォーク中" : "単一";
       return [
         { label: "スロット / I", value: `${this.currentSlot} / I${this.interval} ${phase}` },
-        { label: "シナリオ / 状態", value: `${P2P.forkScenarios[this.scenario].label} (${state})` },
+        { label: "モード / 状態", value: `${this.modeLabel()} (${state})` },
         { label: "検証者数 / 参加率", value: `${this.validatorCount} (online ${this.onlineCount()}) / ${Math.round(this.participation * 100)}%` },
         { label: "正規ヘッド (GHOST)", value: this.fork.headBlock.slot === 0 ? "genesis" : `slot ${this.fork.headBlock.slot}` },
         { label: "枝の重み (上位)", value: branchWeights.slice(0, 2).join(" / ") || "0" },
@@ -624,10 +751,6 @@
     },
 
     /* ------------------------- controls ------------------------- */
-    updateScenarioButtons() {
-      this.scenarioButtons.forEach((b) => b.classList.toggle("primary", b.dataset.value === this.scenario));
-    },
-
     buildControls(container) {
       const ui = P2P.ui;
       const playback = ui.group("再生");
@@ -641,26 +764,30 @@
       playback.appendChild(ui.slider("再生速度 x", 0.25, 3, 0.25, this.speed, (v) => (this.speed = v)));
       container.appendChild(playback);
 
-      const scenarioGroup = ui.group("シナリオ (§6.3)");
-      this.scenarioButtons = [];
-      for (const key of Object.keys(P2P.forkScenarios)) {
-        const button = ui.button(P2P.forkScenarios[key].label, () => {
-          this.scenario = key;
-          this.build();
-          this.auto = true;
-          playButton.textContent = "⏸ 一時停止";
-          this.updateScenarioButtons();
-        });
-        button.dataset.value = key;
-        this.scenarioButtons.push(button);
-        scenarioGroup.appendChild(button);
-      }
-      container.appendChild(scenarioGroup);
-      this.updateScenarioButtons();
+      // Fork phenomena as live parameters/toggles (no preset scenarios).
+      const forkGroup = ui.group("フォーク・パラメータ (§6.3)");
+      const forkNote = document.createElement("div");
+      forkNote.style.cssText = "color:#8da2bd;font-size:11px;line-height:1.5;padding:2px 0 6px;";
+      forkNote.textContent = "トグルと参加率の組合せで各現象を再現: 参加率<67%=確定停止 / 二重提案=一時的フォーク / 分断=ネットワーク分断 / 秘匿=深いリオルグ(OFFで後出し公開)。";
+      forkGroup.appendChild(forkNote);
+      forkGroup.appendChild(ui.toggle("二重提案 (equivocation)", this.equivocateOn, (v) => {
+        this.equivocateOn = v;
+        this.fork.equivocate = v;
+      }));
+      forkGroup.appendChild(ui.toggle("ネットワーク分断", this.partitionOn, (v) => {
+        this.partitionOn = v;
+        this.fork.setPartition(v);
+      }));
+      forkGroup.appendChild(ui.toggle("秘匿枝の後出し (ON=構築 / OFF=公開)", this.withholdOn, (v) => {
+        this.withholdOn = v;
+        if (v) this.fork.startWithhold(); else this.fork.revealWithhold();
+      }));
+      container.appendChild(forkGroup);
 
       const params = ui.group("ネットワーク");
       params.appendChild(ui.slider("検証者数", 12, 40, 2, this.validatorCount, (value) => { this.validatorCount = value; this.build(); }));
       params.appendChild(ui.slider("参加率 %", 40, 100, 5, Math.round(this.participation * 100), (value) => { this.participation = value / 100; }));
+      params.appendChild(ui.slider("多数派グループ比率 %", 50, 80, 5, Math.round(this.majorityFraction * 100), (value) => { this.majorityFraction = value / 100; this.build(); }));
       container.appendChild(params);
     },
   };

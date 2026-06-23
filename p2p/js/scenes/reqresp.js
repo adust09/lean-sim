@@ -1,12 +1,15 @@
 /*
- * reqresp.js — Section 5.5: The request-response domain.
+ * reqresp.js — The request-response domain.
+ * Reference: node/networking/reqresp/message.py (Status, BlocksByRangeRequest,
+ *            protocol IDs), reqresp/codec.py (response wire format),
+ *            node/networking/config.py (MAX_REQUEST_BLOCKS, MAX_PAYLOAD_SIZE).
  *
  * A sequence diagram between a Requester and a Responder showing:
- *   - The mandatory Status handshake (Figure 5.21): fork-digest gate, then a
- *     head comparison that triggers a BeaconBlocksByRange sync.
- *   - The stream lifecycle (Figure 5.19): open + protocol negotiation, request
- *     payload, asymmetric half-closure (EOF), processing, response chunks,
- *     and full close.
+ *   - The mandatory Status handshake: the message carries finalized + head
+ *     Checkpoints (no fork digest); a node checks the peer's finalized
+ *     checkpoint is consistent with its chain, then syncs if head is ahead.
+ *   - The stream lifecycle: open + protocol negotiation, request payload,
+ *     asymmetric half-closure (EOF), processing, response chunks, full close.
  *   - Chain reconstruction: empty slots are omitted by the responder, so the
  *     requester must relink blocks by parent_root.
  */
@@ -16,7 +19,7 @@
   const { util, draw, colors } = P2P;
 
   const LOCAL_HEAD = 1000;
-  const FORK_DIGEST = "0x9b3a";
+  const LOCAL_FINALIZED = 994; // finalized checkpoint shared in the Status handshake
   const CHUNK_INTERVAL = 0.7;
   const PROCESSING_START = 2.8;
   const CHUNK_START = 3.6;
@@ -24,23 +27,29 @@
   const scene = {
     id: "reqresp",
     title: "Request-Response",
-    sectionRef: "5.5",
+    sectionRef: "reqresp/",
     descriptionHTML: `
       <p><b>Gossip がブロードキャストなのに対し、Req/Resp は 1対1 の直接対話。</b>
       同期で履歴を取り寄せたり、取りこぼした特定ブロックをピンポイントで要求する。</p>
-      <p><b>① Status ハンドシェイク (5.5.4):</b> 接続直後に必ず交換。
-      <code>Fork Digest</code> が不一致なら別ネットワークとみなして即切断(ゲート)。
-      一致すれば <code>head</code> を比較し、相手が進んでいれば
-      <code>BeaconBlocksByRange</code> で差分を要求。</p>
-      <p><b>② ストリームの一生 (5.5.2):</b> 1リクエスト=1ストリーム(使い捨て)。
-      要求を書いたら即 <b>write 側を閉じて EOF</b>(非対称クローズ=「以上、どうぞ」)。
-      応答側は処理してチャンクを返し、最後にストリームを閉じる。</p>
-      <p><b>③ 空きスロットと再構築 (5.5.4):</b> 提案者が不在のスロットはブロックが無い。
+      <p><b>① Status ハンドシェイク:</b> 接続直後に必ず交換。Status は
+      <code>finalized</code> と <code>head</code> の Checkpoint(各 root+slot、計 80B)
+      <b>のみ</b>で、<b>fork digest は含まれない</b>。相手の finalized が自分のチェーンと
+      整合するか確認し、相手の <code>head</code> が進んでいれば
+      <code>blocks_by_range</code> で差分を要求。
+      <span style="color:#8da2bd">※ 同一ネットワーク(fork)の判定は gossipsub の
+      トピック名に埋め込まれた fork_digest で行われる(本シーンの Status ではない)。</span></p>
+      <p><b>② ストリームの一生:</b> 1リクエスト=1ストリーム(使い捨て)。プロトコルは
+      <code>/leanconsensus/req/blocks_by_range/1/ssz_snappy</code>。要求を書いたら即
+      <b>write 側を閉じて EOF</b>(非対称クローズ=「以上、どうぞ」)。応答側は処理して
+      チャンクを返し、最後にストリームを閉じる。</p>
+      <p><b>③ 空きスロットと再構築:</b> 提案者が不在のスロットはブロックが無い。
       応答側はそれを<b>省略</b>するので、要求側は連続を仮定できず、
       各ブロックの <code>parent_root</code> が直前のハッシュと繋がるか検証して連結する。</p>
-      <p><b>各チャンクのワイヤ形式 (5.5.3):</b>
-      <code>[status 1B][varint 長さ][Snappy(SSZ)]</code>。
-      長さを先に宣言させ、10 MiB 超なら復号前に切断(解凍爆弾対策)。</p>
+      <p><b>ワイヤ形式 (codec.py):</b> 応答チャンクは
+      <code>[response_code 1B][varint 長さ][Snappy(SSZ)]</code>
+      (code: 0=SUCCESS / 1=INVALID_REQUEST / 2=SERVER_ERROR / 3=RESOURCE_UNAVAILABLE)。
+      要求は code 無しの <code>[varint 長さ][Snappy(SSZ)]</code>。長さを先に宣言させ、
+      10 MiB 超なら復号前に切断(解凍爆弾対策)、1要求最大 1024 ブロック(MAX_REQUEST_BLOCKS)。</p>
       <p><b>操作:</b> 「次へ」で1段ずつ、または「自動再生」。「ヘッド差」と「空きスロット」を変更可。</p>`,
 
     /* ------------------------- state ------------------------- */
@@ -89,11 +98,11 @@
 
       // Sequence-diagram messages on a shared time axis (one-way trip = 1 unit).
       const messages = [
-        { t: 0, dir: 1, kind: "msg", label: `Status (fork=${FORK_DIGEST}, head=${LOCAL_HEAD})` },
-        { t: 0.6, dir: -1, kind: "msg", label: `Status (fork=${FORK_DIGEST}, head=${remoteHead})` },
-        { t: 1.1, kind: "note", label: `Fork Digest 一致 ✓ — head ${remoteHead} > ${LOCAL_HEAD}` },
-        { t: 1.5, dir: 1, kind: "msg", label: "Open stream + protocol 交渉" },
-        { t: 2.1, dir: 1, kind: "msg", label: `Request: BeaconBlocksByRange [${firstSlot}..${remoteHead}]` },
+        { t: 0, dir: 1, kind: "msg", label: `Status (finalized=s${LOCAL_FINALIZED}, head=s${LOCAL_HEAD})` },
+        { t: 0.6, dir: -1, kind: "msg", label: `Status (finalized=s${LOCAL_FINALIZED}, head=s${remoteHead})` },
+        { t: 1.1, kind: "note", label: `finalized s${LOCAL_FINALIZED} 整合 ✓ — head s${remoteHead} > s${LOCAL_HEAD} → 同期` },
+        { t: 1.5, dir: 1, kind: "msg", label: "Open stream + protocol 交渉 (/leanconsensus/req/blocks_by_range/1)" },
+        { t: 2.1, dir: 1, kind: "msg", label: `Request: blocks_by_range(start_slot=${firstSlot}, count=${this.headGap})` },
         { t: 2.6, kind: "halfclose", label: "write 側を閉じる → EOF (half-closed)" },
         { t: PROCESSING_START, kind: "processing", label: "Responder: DB lookup（空きスロットは省略）" },
       ];
@@ -273,9 +282,9 @@
       ctx.fillStyle = "#0e1420dd";
       ctx.fill();
       ctx.restore();
-      draw.label(ctx, "chunk wire 形式", x + 10, y - 4, colors.textDim, "10px ui-monospace, monospace", "left");
+      draw.label(ctx, "response chunk wire 形式", x + 10, y - 4, colors.textDim, "10px ui-monospace, monospace", "left");
       const segments = [
-        ["status 1B", colors.nodeHasMessage],
+        ["code 1B", colors.nodeHasMessage],
         ["varint len", colors.accent],
         ["Snappy(SSZ)", colors.ihave],
       ];

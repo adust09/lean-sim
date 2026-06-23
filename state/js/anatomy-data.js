@@ -32,26 +32,12 @@
       category: "状態",
       explanation: "ネットワーク全体で共有される定数群（スロット時間、最大バリデータ数など）。ハードフォークで書き換えられる以外は不変。",
     },
-    validator_pubkey: {
-      label: "pubkey",
-      sectionGroup: "identity",
-      fixedSize: true,
-      category: "状態 › Identity",
-      explanation: "BLS12-381 公開鍵（48 bytes）。バリデータを一意に識別し、署名検証に使用する。",
-    },
-    validator_status: {
-      label: "status",
-      sectionGroup: "identity",
-      fixedSize: true,
-      category: "状態 › Identity",
-      explanation: "Active / Exited / Slashed の3状態。ステータスによって投票権・引き出し条件が変わる。",
-    },
-    validator_effective_balance: {
-      label: "effective_balance",
-      sectionGroup: "identity",
-      fixedSize: true,
-      category: "状態 › Identity",
-      explanation: "投票重み（ETH 単位）。スラッシングや引き出しで減少する。スーパーマジョリティの計算に使う。",
+    validators: {
+      label: "validators[]",
+      sectionGroup: "registry",
+      fixedSize: false,
+      category: "状態 › Validator Registry",
+      explanation: "バリデータ登録簿（可変長リスト・containers/validator.py）。各 Validator は {attestation_public_key: Bytes52, proposal_public_key: Bytes52, index: uint64}。鍵は XMSS（ハッシュベース・耐量子）で BLS ではない。ステーク残高は持たず、投票はバリデータ数で等価に重み付けされる。",
     },
     chrono_slot: {
       label: "slot",
@@ -72,7 +58,7 @@
       sectionGroup: "chronology",
       fixedSize: true,
       category: "状態 › Chronology",
-      explanation: "安全フロア。このチェックポイント以前のブロックは覆らない。Casper FFG の確定性。",
+      explanation: "安全フロア。このチェックポイント以前のブロックは覆らない。3SF（3-slot finality）の確定性。",
     },
     chrono_latest_justified: {
       label: "latest_justified",
@@ -96,18 +82,18 @@
       explanation: "どのスロットが justified 済みかを記録するビットフィールド。finalization の連鎖判定に使う。",
     },
     voting_justification_roots: {
-      label: "justification_roots",
+      label: "justifications_roots",
       sectionGroup: "voting",
       fixedSize: false,
       category: "状態 › Active Voting",
-      explanation: "票を集めている候補ブロック root の一覧。各 attestation の target がここに記録される。",
+      explanation: "票を集めている候補ブロック root の一覧（containers/state.py の justifications_roots）。各 attestation の target がここに記録される。",
     },
     voting_validator_bitfields: {
-      label: "validator_bitfields",
+      label: "justifications_validators",
       sectionGroup: "voting",
       fixedSize: false,
       category: "状態 › Active Voting",
-      explanation: "候補ごとの投票者ビットフィールド。誰が誰に投票したかを追跡し、二重投票を防ぐ。",
+      explanation: "候補 root × バリデータの投票ビットフィールド（justifications_validators）。1本の平坦な bitlist に連結され、誰がどの候補に投票したかを追跡して二重投票を防ぐ。",
     },
     header_slot: {
       label: "slot",
@@ -160,25 +146,27 @@
 
   const SECTION_GROUPS = {
     config: { title: "Configuration", color: colors.textDim },
-    identity: { title: "Identity (Validator Registry)", color: colors.nodeSource },
     chronology: { title: "Chronology", color: colors.accent },
+    registry: { title: "Validator Registry", color: colors.nodeSource },
     voting: { title: "Active Voting", color: colors.ihave },
     header: { title: "Header (固定サイズ)", color: colors.graft },
     body: { title: "Body (可変サイズ)", color: colors.nodeHasMessage },
   };
 
+  /* State field order mirrors containers/state.py:
+   * config, slot, latest_block_header, latest_justified, latest_finalized,
+   * historical_block_hashes, justified_slots, validators,
+   * justifications_roots, justifications_validators. */
   function buildStateFields() {
     return [
       { key: "config", groupBoundary: "config" },
-      { key: "validator_pubkey", groupBoundary: "identity" },
-      { key: "validator_status" },
-      { key: "validator_effective_balance" },
       { key: "chrono_slot", groupBoundary: "chronology" },
       { key: "chrono_latest_block_header" },
-      { key: "chrono_latest_finalized" },
       { key: "chrono_latest_justified" },
+      { key: "chrono_latest_finalized" },
       { key: "chrono_historical_block_hashes" },
       { key: "chrono_justified_slots" },
+      { key: "validators", groupBoundary: "registry" },
       { key: "voting_justification_roots", groupBoundary: "voting" },
       { key: "voting_validator_bitfields" },
     ];
@@ -227,7 +215,6 @@
   };
 
   const STATE_LIVE = {
-    validator_effective_balance: (sc) => ({ text: `Σ ${sc.currentState.totalActiveStake} ETH`, tone: "dim" }),
     chrono_slot: (sc) => ({
       text: `${sc.currentState.slot}`,
       tone: sc.currentState.slot !== sc.stateSnapshot.slot ? "changed" : "normal",
@@ -235,9 +222,10 @@
     chrono_latest_block_header: (sc) => ({ text: sc.currentState.latestBlockHashHex, tone: "normal" }),
     chrono_latest_finalized: (sc) => ({ text: `slot ${sc.currentState.latestFinalizedSlot}`, tone: "normal" }),
     chrono_latest_justified: (sc) => ({ text: `slot ${sc.currentState.latestJustifiedSlot}`, tone: "normal" }),
+    validators: (sc) => ({ text: `[${sc.currentState.totalValidators}]`, tone: "dim" }),
     voting_justification_roots: (sc) =>
-      sc.currentState.justifiedWeight > 0
-        ? { text: `${sc.currentState.justifiedWeight} ETH`, tone: "changed" }
+      sc.currentState.justifiedVotes > 0
+        ? { text: `${sc.currentState.justifiedVotes} 票`, tone: "changed" }
         : null,
   };
 
@@ -319,7 +307,7 @@
     const mark = attestation.status === "counted" ? "✓" : attestation.status === "ignored" ? "✗" : "·";
     draw.label(ctx, `att[${attestation.index}] src:${attestation.sourceSlot} → tgt:${attestation.targetSlot}`,
       fx + 22, yc + 1, color, "9px ui-monospace, monospace", "left");
-    draw.label(ctx, `w:${attestation.validatorWeight} ${mark}`, fx + fw - 6, yc + 1, color,
+    draw.label(ctx, `${attestation.voteCount}票 ${mark}`, fx + fw - 6, yc + 1, color,
       "9px ui-monospace, monospace", "right");
   }
 

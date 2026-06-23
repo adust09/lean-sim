@@ -35,7 +35,7 @@
   const scene = {
     id: "forkchoice",
     title: "フォーク選択と正当化",
-    sectionRef: "6.2",
+    sectionRef: "fork_choice.py · slot.py",
     descriptionHTML: `
       <p><b>Attestation の3参照 (§6.2):</b></p>
       <ul>

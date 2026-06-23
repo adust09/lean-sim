@@ -27,8 +27,12 @@
   const scene = {
     id: "discovery",
     title: "Discovery v5",
-    sectionRef: "5.2",
+    sectionRef: "enr/ (discv5: 予定)",
     descriptionHTML: `
+      <p style="color:#8da2bd"><b>注:</b> 現行の leanSpec 参照実装は、ピア発見を
+      <b>ENR から解決した静的ブートストラップピア</b>で行い(<code>cli/bootstrap.py</code>,
+      <code>node/networking/enr/</code>)、discv5/Kademlia DHT はまだ実装されていない。
+      本シーンは将来 leanSpec に追加が見込まれる discv5 の探索機構を可視化したもの。</p>
       <p><b>問題:</b> 初めて起動したノードは孤立している。数百万のノードの中から、
       同じチェーンを追う相手を見つけたい。</p>
       <p><b>Kademlia DHT の答え:</b> Node ID は 256bit の数値(ここでは見やすく16bit)。

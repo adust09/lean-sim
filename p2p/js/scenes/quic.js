@@ -22,7 +22,7 @@
   const scene = {
     id: "quic",
     title: "QUIC トランスポート",
-    sectionRef: "5.3",
+    sectionRef: "transport/quic/",
     descriptionHTML: `
       <p><b>QUIC は UDP 上の信頼性つきトランスポート。</b>TCP と同じ保証(順序・再送・輻輳制御)を
       ユーザ空間で提供しつつ、TCP の構造的な弱点を取り除く。</p>
@@ -30,11 +30,16 @@
       あるパケットが落ちると、後続が全ストリーム分まとめて止まる(配信待ち)。
       QUIC はストリームをトランスポートの第一級要素にし、損失を <i>そのストリームだけ</i> に隔離する。
       → 下のアニメで A#3 を落とすと、TCP は B も止まるが QUIC は B が止まらない。</p>
-      <p><b>② 接続確立の RTT:</b> TCP+TLS1.3 はハンドシェイクが層状に積み重なり数 RTT かかる(比較用)。
+      <p><b>② 接続確立の RTT:</b> TCP+TLS1.3 はハンドシェイクが層状に積み重なり数 RTT かかる(比較用 —
+      leanSpec に TCP トランスポートは存在せず QUIC が唯一)。
       <b>Lean Consensus は QUIC をそのまま採用</b>し、TLS1.3 を統合した <b>1-RTT</b> でハンドシェイクを終える
       — これが本線の唯一のトランスポート。(QUIC 一般の 0-RTT=セッション再開は、leanSpec 参照実装では
       early data を無効化しており本線では使わない。)</p>
-      <p>(QUIC はさらに Connection ID による経路移行、既定で認証・暗号化、という利点も持つ — 5.3.2)</p>
+      <p><b>libp2p TLS (transport/quic/tls.py):</b> ALPN は <code>"libp2p"</code>。
+      自己署名 X.509 証明書の独自拡張(OID <code>1.3.6.1.4.1.53594.1.1</code>)に、
+      署名プレフィックス <code>libp2p-tls-handshake:</code> を付けて署名した peer identity を埋め込み、
+      ハンドシェイク中に相手の PeerId を検証する。</p>
+      <p>(QUIC はさらに Connection ID による経路移行、既定で認証・暗号化、という利点も持つ。)</p>
       <p><b>操作:</b> 上のボタンで2つの比較を切り替え。リプレイで再生。</p>`,
 
     /* ------------------------- state ------------------------- */

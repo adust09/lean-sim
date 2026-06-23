@@ -99,7 +99,7 @@
     controlsHost.innerHTML = "";
     scene.buildControls(controlsHost);
     descriptionHost.innerHTML = scene.descriptionHTML;
-    sectionBadge.textContent = "§ " + scene.sectionRef;
+    sectionBadge.textContent = scene.sectionRef;
     buildStatsPanel(scene);
   }
 
@@ -112,7 +112,7 @@
       button.className = "tab";
       button.dataset.sceneId = sceneId;
       button.innerHTML =
-        `<span class="tab-section">§${scene.sectionRef}</span>` +
+        `<span class="tab-section">${scene.sectionRef}</span>` +
         `<span class="tab-title">${scene.title}</span>`;
       button.addEventListener("click", () => {
         window.location.hash = sceneId;

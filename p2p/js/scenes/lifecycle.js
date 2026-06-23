@@ -123,15 +123,16 @@
   const scene = {
     id: "lifecycle",
     title: "ノードの一生",
-    sectionRef: "5.2–5.5",
+    sectionRef: "node/networking/",
     descriptionHTML: `
       <p><b>1つのノードが Network に参加してからブロックを生成するまで</b>を、1本の
       シナリオとして俯瞰する総まとめ。上部のパイプラインが全行程、下の大パネルが
       現在の段階の実モーション(5.2〜5.5 の各タブと同じシミュレーション)。</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>発見 (§5.2):</b> Discovery v5 の XOR 探索でピアを見つける。</li>
+        <li><b>発見 (§5.2):</b> ピアを発見(現行 leanSpec は ENR 解決の静的ブートストラップ、
+        discv5/XOR 探索は将来予定。本デモは将来機構の XOR 探索を表示)。</li>
         <li><b>接続 (§5.3):</b> QUIC で 1-RTT 接続。</li>
-        <li><b>同期 (§5.5):</b> Status 交換 → BeaconBlocksByRange で不足ブロックを取得。</li>
+        <li><b>同期 (§5.5):</b> Status 交換 → blocks_by_range で不足ブロックを取得。</li>
         <li><b>購読 (§5.4):</b> GRAFT して gossip mesh に参加。</li>
         <li><b>ブロック生成 (§5.4):</b> ブロックを発行し mesh を伝播 → 全体へ。</li>
       </ol>
