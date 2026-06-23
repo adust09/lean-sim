@@ -467,10 +467,12 @@
       draw.clear(ctx, this.width, this.height);
       this.renderClock(ctx);
       this.renderNetwork(ctx);
-      this.renderUpsilonAnatomy(ctx); // I0 Υ state-transition motion over the mesh
       this.renderAggregatePanel(ctx);
       this.renderUpsilonPipeline(ctx);
       this.renderChain(ctx);
+      // Drawn last so the I0 Υ anatomy sits directly under the Υ panel, covering
+      // the (idle-at-I0) aggregate panel and vote gauge in the right column.
+      this.renderUpsilonAnatomy(ctx);
     },
 
     /** Build an anatomy-data-compatible view of the block processed at I0, so the
@@ -516,30 +518,33 @@
       };
     },
 
-    /** I0 Υ motion: overlay the State container + Block + per-phase field flow
-     *  (reusing the state scene's anatomy renderers) over the mesh while Υ runs. */
+    /** I0 Υ motion: the State container + Block + per-phase field flow (reusing the
+     *  state scene's anatomy renderers), placed in the right column directly below
+     *  the Υ pipeline panel while the transition runs at interval 0. */
     renderUpsilonAnatomy(ctx) {
       if (this.upsilonOverlay <= 0.01 || !P2P.stateAnatomy || !this.anatomyState) return;
       const phase = util.clamp(Math.floor(this.slotTimer / (INTERVAL_DURATION / 4)), 0, 3);
       const view = this.buildUpsilonAnatomyView(phase);
-      const x = this.netLeft();
-      const y = this.netTop();
-      const w = this.netRight() - this.netLeft();
-      const h = this.netBottom() - this.netTop();
+      // Right column, just below the Υ pipeline strip (netTop+144 .. +208).
+      const x = this.netRight() + 20;
+      const y = this.netTop() + 212;
+      const w = this.width - x - 28;
+      const h = this.netBottom() - y;
+      if (w < 220 || h < 140) return;
 
-      // Dim backdrop so the overlay reads clearly while the mesh shows faintly.
+      // Opaque backdrop covers the idle aggregate panel + gauge during I0.
       ctx.save();
-      ctx.globalAlpha = this.upsilonOverlay * 0.85;
-      draw.roundedRect(ctx, x - 6, y - 4, w + 12, h + 12, 10);
+      ctx.globalAlpha = this.upsilonOverlay * 0.92;
+      draw.roundedRect(ctx, x - 6, y - 4, w + 12, h + 10, 10);
       ctx.fillStyle = "#0b0f17";
       ctx.fill();
       ctx.restore();
 
       ctx.save();
       ctx.globalAlpha = this.upsilonOverlay;
-      draw.label(ctx, `状態遷移 Υ(S,B) — ${UPSILON_PHASES[phase]}`, x + w / 2, y + 6,
-        colors.nodeActive, "bold 11px ui-monospace, monospace");
-      const colGap = 12;
+      draw.label(ctx, `状態遷移 Υ(S,B) — ${UPSILON_PHASES[phase]} 実行中`, x + w / 2, y + 6,
+        colors.nodeActive, "bold 10px ui-monospace, monospace");
+      const colGap = 10;
       const colWidth = (w - colGap) / 2;
       P2P.stateAnatomy.renderStateContainer(ctx, view, x, y + 16, colWidth, h - 22);
       P2P.stateAnatomy.renderBlockContainer(ctx, view, x + colWidth + colGap, y + 16, colWidth, h - 22);
