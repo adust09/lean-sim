@@ -270,7 +270,7 @@
       }
       this.slotTally = tally;
       this.headSlotVotes = tally.size ? Math.max(...tally.values()) : 0; // leading branch's votes
-      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.height - 110 };
+      const tgt = this.dotTarget || { x: this.netRight() + 40, y: this.netTop() + 404 };
       // I2 aggregation: the Sagg bundle travels the whole interval, landing at I2's end.
       if (this.expectedVotes > 0) this.aggregateParticles.push({ t: 0, duration: INTERVAL_DURATION, sigCount: this.collectedSigs, toX: tgt.x, toY: tgt.y });
     },
@@ -364,7 +364,7 @@
       const aggregator = this.validators[this.aggregatorIndex] || null;
       this.aggX = aggregator ? this.vx(aggregator) : this.netRight();
       this.aggY = aggregator ? this.vy(aggregator) : this.netBottom();
-      this.dotTarget = { x: this.netRight() + 40, y: this.height - 110 };
+      this.dotTarget = { x: this.netRight() + 40, y: this.netTop() + 404 };
 
       // I1 — attestations fold into the aggregator; each marks its voter PENDING.
       const survivingDots = [];
@@ -635,7 +635,13 @@
     /** The bottom area: the fork tree (§6.3 / GHOST) plus the per-slot weight bar. */
     renderChain(ctx) {
       draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${P2P.forkScenarios[this.scenario].label}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
-      const box = { x: 30, y: this.height - 172, width: this.width - 410, height: 92 };
+      // The vote gauge moved up into the right column, so the bottom row is free:
+      // extend the tree to full width — unless a short canvas drops the chain
+      // level with the right-column panels, in which case stop before them.
+      const chainTop = this.height - 172;
+      const panelsBottom = this.netTop() + 412; // gauge bottom in the right column
+      const rightLimit = chainTop >= panelsBottom ? this.width - 30 : this.netRight() - 10;
+      const box = { x: 30, y: chainTop, width: rightLimit - 30, height: 92 };
       this.fork.renderTree(ctx, box);
       // I3 safe-target motion: expanding-ring pulse + badge on the anchored block.
       const safe = this.fork.latestJustified;
