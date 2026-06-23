@@ -1,15 +1,15 @@
 /*
  * beacon.js — Capstone: the whole protocol running as a live beacon chain,
- * now including fork scenarios (§6.3) on a fork TREE with LMD-GHOST.
+ * now including fork scenarios (fork_choice.py) on a fork TREE with LMD-GHOST.
  *
  * One screen tying every chapter together on the per-slot heartbeat:
- *   §3 Time      — the slot clock and its five intervals drive the cycle.
- *   §5 P2P       — a proposed block propagates across a validator mesh.
- *   §6 Consensus — validators attest (pending→accepted); votes aggregate;
+ *   config.py Time      — the slot clock and its five intervals drive the cycle.
+ *   node/networking/ P2P       — a proposed block propagates across a validator mesh.
+ *   fork_choice.py Consensus — validators attest (pending→accepted); votes aggregate;
  *                  a 2/3 supermajority justifies; GHOST picks the head; forks
  *                  reorg, partitions stall finality.
- *   §4 State     — Υ runs at block-processing time; justification lags one slot.
- *   §2 SSZ       — each block carries a hash-tree-root and a parent link.
+ *   state_transition.py State     — Υ runs at block-processing time; justification lags one slot.
+ *   ssz/ SSZ       — each block carries a hash-tree-root and a parent link.
  *
  * The fork TREE, GHOST head selection, and scenario engine live in forkmodel.js;
  * this scene drives the per-slot pipeline and all rendering.
@@ -28,14 +28,14 @@
 
   // The five-interval slot pipeline — action points per timeline.py tick_interval.
   const INTERVAL_NARRATION = [
-    "Interval 0 — 提案着弾 / 前票受理: proposer がブロックと state_root を配信。各ノードが Υ(§4.3) を再実行し照合し、前スロットの保留集約票を受理して justification を確定 (accept_new_attestations)。",
-    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (§6.2)。票は pending で保留(この区間は処理点なし=票がネットワークに伝搬する猶予)。",
-    "Interval 2 — 署名集約: aggregator が今スロットの票を1本の証明に束ねブロードキャスト (§6.4 aggregate)。",
+    "Interval 0 — 提案着弾 / 前票受理: proposer がブロックと state_root を配信。各ノードが Υ(state_transition.py) を再実行し照合し、前スロットの保留集約票を受理して justification を確定 (accept_new_attestations)。",
+    "Interval 1 — Attestation Broadcast: 検証者が attestation を配信 (fork_choice.py)。票は pending で保留(この区間は処理点なし=票がネットワークに伝搬する猶予)。",
+    "Interval 2 — 署名集約: aggregator が今スロットの票を1本の証明に束ねブロードキャスト (containers/aggregation.py aggregate)。",
     "Interval 3 — Safe Target Update: 直近で 2/3 を集めたブロック (セーフターゲット) を確定し高速確定の視点を安定化 (update_safe_target)。",
-    "Interval 4 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (§6.3 accept_new_attestations)。",
+    "Interval 4 — Attestation Acceptance: pending の票を受理し fork choice に投入。GHOST でヘッド再計算 (fork_choice.py accept_new_attestations)。",
   ];
 
-  // Υ's 4-phase transition pipeline, run when a block is processed at I0 (§4.3).
+  // Υ's 4-phase transition pipeline, run when a block is processed at I0 (state_transition.py).
   const UPSILON_PHASES = ["① 時刻同期", "② ヘッダ検証", "③ ペイロード実行", "④ state root"];
 
   const scene = {
@@ -43,16 +43,16 @@
     title: "ビーコンチェーン稼働",
     sectionRef: "forks/lstar/",
     descriptionHTML: `
-      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 5つのインターバル(§3)が毎スロットを駆動する:</p>
+      <p><b>全章を1本のスロット・ハートビートで統合した総まとめ。</b> 5つのインターバル(config.py)が毎スロットを駆動する:</p>
       <ol style="padding-left:18px;margin:0 0 9px">
-        <li><b>提案/受理 (I0):</b> proposer がブロックを作り伝播 (§5)。<b>状態遷移 Υ</b>(§4.3 の4フェーズ)を各ノードが再実行し <code>state_root</code> 照合。前スロットの保留集約票をここで受理し justification 確定 (accept_new_attestations)。</li>
+        <li><b>提案/受理 (I0):</b> proposer がブロックを作り伝播 (node/networking/)。<b>状態遷移 Υ</b>(state_transition.py の4フェーズ)を各ノードが再実行し <code>state_root</code> 照合。前スロットの保留集約票をここで受理し justification 確定 (accept_new_attestations)。</li>
         <li><b>投票 (I1):</b> 検証者が attestation を配信。票は <b>pending</b>(保留)。処理点なし。</li>
-        <li><b>集約 (I2):</b> aggregator が同一票を1本 <code>Sagg</code> に集約 (§6.4 aggregate / 右パネル)。</li>
+        <li><b>集約 (I2):</b> aggregator が同一票を1本 <code>Sagg</code> に集約 (containers/aggregation.py aggregate / 右パネル)。</li>
         <li><b>セーフターゲット (I3):</b> 直近で 2/3 を集めたブロックを確定し視点を安定化 (update_safe_target)。</li>
         <li><b>受理 (I4):</b> pending を受理し fork choice に投入。<b>GHOST</b> でヘッド再計算。</li>
       </ol>
       <p><b>2つの軸:</b> I0–I4 は fork-choice 軸。<b>Υ はブロック処理軸</b>で、票は集約として次ブロックに載り、その Υ 処理で justification が<b>1スロット遅れて</b>確定する。</p>
-      <p><b>フォーク (§6.3) — パラメータで再現:</b> 下のトグルと参加率を切り替えるとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。
+      <p><b>フォーク (fork_choice.py) — パラメータで再現:</b> 下のトグルと参加率を切り替えるとチェーンが木になり、正規ヘッドは <b>GHOST</b>(最重部分木)で決まる。
       <b>参加率 &lt; 67%</b> = 2/3 未達で <b>finality 停止</b>(ブロックは生成され続ける)。
       <b>二重提案 (equivocation)</b> = 提案者が2ブロックを出し票が割れ、軽い枝は reorg(ON→OFF の一瞬で「一時的フォーク」)。
       <b>ネットワーク分断</b> = 各群が別枝を伸ばし、どちらも 2/3 未達で停止、OFF(回復)で重い枝が勝つ。検証者ノードは投票先の枝色(青=群0 / 橙=群1)に染まる。</p>
@@ -554,14 +554,14 @@
         }
         draw.disc(ctx, x, y, 7, fill, stroke, 1.4);
       }
-      draw.label(ctx, "検証者メッシュ (§5)" + (this.fork.partitioned ? " — 2群に分断 (青60/橙40)" : ""), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
+      draw.label(ctx, "検証者メッシュ (node/networking/)" + (this.fork.partitioned ? " — 2群に分断 (青60/橙40)" : ""), this.netLeft(), this.netTop() - 12, colors.textDim, "11px ui-monospace, monospace", "left");
       if (aggregatorActive) {
         const agg = this.validators[this.aggregatorIndex];
         if (agg) draw.label(ctx, `aggregator ▸ ${this.collectedSigs}署名 → 1`, this.vx(agg), this.vy(agg) - 18, colors.graft, "10px ui-monospace, monospace");
       }
     },
 
-    /** The aggregate object being built this slot (§6.4 / Fig 6.4): AttestationData + bitfield + N→1. */
+    /** The aggregate object being built this slot (containers/aggregation.py): AttestationData + bitfield + N→1. */
     renderAggregatePanel(ctx) {
       const x = this.netRight() + 20;
       const y = this.netTop() + 220; // below the Υ state-transition panel
@@ -576,7 +576,7 @@
       ctx.lineWidth = 1.5;
       ctx.stroke();
       ctx.restore();
-      draw.label(ctx, "集約 Aggregate (§6.4 / Fig 6.4)", x + 12, y + 16, colors.accent, "bold 11px ui-monospace, monospace", "left");
+      draw.label(ctx, "集約 Aggregate (containers/aggregation.py)", x + 12, y + 16, colors.accent, "bold 11px ui-monospace, monospace", "left");
       const head = this.fork.headBlock;
       const triple = this.attestTriple || { sourceSlot: this.fork.latestJustified.slot, targetSlot: head.slot };
       draw.label(ctx, `AttestationData  source s${triple.sourceSlot} · target s${triple.targetSlot} · head ${head.root}`, x + 12, y + 36, colors.textDim, "10px ui-monospace, monospace", "left");
@@ -611,7 +611,7 @@
       }
     },
 
-    /** Υ state transition pipeline (§4.3): a 4-phase strip lighting up 1→4 as the I0 block is processed. */
+    /** Υ state transition pipeline (state_transition.py): a 4-phase strip lighting up 1→4 as the I0 block is processed. */
     renderUpsilonPipeline(ctx) {
       const x = this.netRight() + 20;
       const y = this.netTop() + 144; // above the aggregate panel
@@ -628,8 +628,8 @@
       ctx.restore();
       const reVerified = this.validators.filter((v) => v.hasBlock).length;
       const title = active
-        ? `Υ(S,B) §4.3 — proposer#${this.proposerForGroup(0).index} 算出 → ${reVerified}/${this.onlineCount()} ノード再実行・state_root 照合✓`
-        : "状態遷移 Υ(S,B) — ブロック処理パイプライン (§4.3)";
+        ? `Υ(S,B) state_transition.py — proposer#${this.proposerForGroup(0).index} 算出 → ${reVerified}/${this.onlineCount()} ノード再実行・state_root 照合✓`
+        : "状態遷移 Υ(S,B) — ブロック処理パイプライン (state_transition.py)";
       draw.label(ctx, title, x + 12, y + 15, active ? colors.nodeActive : colors.textDim, "bold 10px ui-monospace, monospace", "left");
       const phase = active ? util.clamp(Math.floor(this.slotTimer / (INTERVAL_DURATION / 4)), 0, 4) : -1;
       const chipWidth = (width - 24 - 18) / 4;
@@ -656,9 +656,9 @@
       draw.label(ctx, detail, x + 12, y + 56, active ? colors.text : colors.textDim, "10px ui-monospace, monospace", "left");
     },
 
-    /** The bottom area: the fork tree (§6.3 / GHOST) plus the per-slot weight bar. */
+    /** The bottom area: the fork tree (fork_choice.py / GHOST) plus the per-slot weight bar. */
     renderChain(ctx) {
-      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (§4,§6.3) · ${this.modeLabel()}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
+      draw.label(ctx, `フォーク木 + GHOST フォーク選択 (state_transition.py,fork_choice.py) · ${this.modeLabel()}`, 30, this.height - 188, colors.textDim, "12px ui-monospace, monospace", "left");
       // The vote gauge moved up into the right column, so the bottom row is free:
       // extend the tree to full width — unless a short canvas drops the chain
       // level with the right-column panels, in which case stop before them.
@@ -703,7 +703,7 @@
       if (barWidth < 80) return;
       const thresholdFraction = this.threshold() / this.validatorCount;
       const voteFraction = this.validatorCount ? this.votesAccrued / this.validatorCount : 0;
-      draw.label(ctx, "先頭枝の今スロット得票 (§6)", x, y - 12, colors.textDim, "11px ui-monospace, monospace", "left");
+      draw.label(ctx, "先頭枝の今スロット得票 (fork_choice.py)", x, y - 12, colors.textDim, "11px ui-monospace, monospace", "left");
       ctx.save();
       draw.roundedRect(ctx, x, y, barWidth, 16, 4);
       ctx.fillStyle = "#10161f";
@@ -765,7 +765,7 @@
       container.appendChild(playback);
 
       // Fork phenomena as live parameters/toggles (no preset scenarios).
-      const forkGroup = ui.group("フォーク・パラメータ (§6.3)");
+      const forkGroup = ui.group("フォーク・パラメータ (fork_choice.py)");
       const forkNote = document.createElement("div");
       forkNote.style.cssText = "color:#8da2bd;font-size:11px;line-height:1.5;padding:2px 0 6px;";
       forkNote.textContent = "トグルと参加率の組合せで各現象を再現: 参加率<67%=確定停止 / 二重提案=一時的フォーク / 分断=ネットワーク分断 / 秘匿=深いリオルグ(OFFで後出し公開)。";

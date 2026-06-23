@@ -1,8 +1,8 @@
 /*
  * pipeline.js — Sections 4.1–4.3: State transition over the full anatomy.
  *
- * Integrates the former "anatomy" explorer (§4.1–4.2) into the 4-phase
- * transition pipeline (§4.3): the State container and the Block are drawn as
+ * Integrates the former "anatomy" explorer (containers/state.py) into the 4-phase
+ * transition pipeline (state_transition.py): the State container and the Block are drawn as
  * their full field structure (the anatomy), and the pipeline animates a block
  * being validated through the 4 phases on top of it.
  *
@@ -77,14 +77,14 @@
       <b>完全な構造（解剖）</b>の上で実行する統合ビューです。上部が各フェーズの処理（実行ログ）、
       下部が状態コンテナ（左）とブロック（右）。各フェーズは自分が読み書きするフィールドを
       <b>橙色でハイライト</b>します。</p>
-      <p><b>① 時刻同期 (§4.3.1):</b> state.slot をブロックのスロットまで進める
+      <p><b>① 時刻同期 (process_slots):</b> state.slot をブロックのスロットまで進める
       （chrono.slot / historical_block_hashes を更新）。</p>
-      <p><b>② ヘッダ検証 (§4.3.2):</b> proposer_index・parent_root（state の
+      <p><b>② ヘッダ検証 (process_block_header):</b> proposer_index・parent_root（state の
       latest_block_header と照合）・slot の3検査。いずれか失敗で即却下。</p>
-      <p><b>③ ペイロード実行 (§4.3.3):</b> body.attestations を順に処理。source が
+      <p><b>③ ペイロード実行 (process_attestations):</b> body.attestations を順に処理。source が
       justified 済みなら票を計上、2/3 超（3·票 ≥ 2·N、重みはバリデータ数で等価）で
       target を justified に昇格。無効票はソフトフェイル（スキップ）。</p>
-      <p><b>④ integrity 検証 (§4.3.4):</b> HashTreeRoot(S<sub>n+1</sub>) と
+      <p><b>④ integrity 検証 (state_root 検証):</b> HashTreeRoot(S<sub>n+1</sub>) と
       block.header.state_root を照合。一致で受理、嘘なら却下。</p>
       <p><b>操作:</b> フィールドに<b>ホバー/クリック</b>すると役割の解説が中央に出ます
       （□=固定サイズ / ◇=可変サイズ）。「次のフェーズ ▶」「自動再生」で実行、
