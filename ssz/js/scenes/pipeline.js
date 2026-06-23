@@ -44,8 +44,9 @@
       「leanSpec 実装」= Checkpoint / Validator(本物) / AttestationData(ネスト) / BlockHeader(深い木+padding)。
       フィールド数で木の深さ・gindex・padding が変わる。</p>
       <p><b>フィールド種別:</b> 固定 / 可変(offset) / ネスト(子コンテナの htr が葉) / padding(zero)。</p>
-      <p><b>List/Bitlist の内部木:</b> 可変フィールド(例 <code>signatures</code>)を選ぶと右に内部木を展開。
-      木の<b>高さは要素数ではなく容量(LIMIT)で固定</b>され、不足分は<b>ゼロ部分木</b>で埋め、
+      <p><b>List/Bitlist の内部木:</b> 可変フィールド(例 <code>signatures</code>)を選ぶと、
+      その葉が<b>木の上方向に展開</b>され内部の容量木が現れます。木の
+      <b>高さは要素数ではなく容量(LIMIT)で固定</b>され、不足分は<b>ゼロ部分木</b>で埋め、
       最後に <code>mix_in_length(root, 長さ)</code> を取った値がコンテナ木の葉になります
       (<code>crypto/merkleization.py</code>)。「リスト長」スライダーで葉の埋まり方が変わります。</p>
       <p><b>木の色凡例:</b><br>
@@ -106,16 +107,56 @@
 
     /* ----------------------- geometry ----------------------- */
     serializeTop() { return 116; },
-    treeBox() { return { left: 30, top: 248, right: this.width * 0.63, bottom: this.height - 96 }; },
+    /* When a List/Bitlist field is selected the tree grows: its leaf expands
+     * upward into the capacity-sized chunk subtree, so use the full width and a
+     * higher top. Otherwise the original compact box (proof panel on the right). */
+    listSelected() { return this.selectedField().kind === "variable"; },
+    treeBox() {
+      const expand = this.listSelected();
+      return {
+        left: 30,
+        top: expand ? 212 : 248,
+        right: expand ? this.width - 30 : this.width * 0.63,
+        bottom: this.height - 96,
+      };
+    },
+    /* Vertical layout in rows. With a list selected, the chunk subtree occupies
+     * the rows above the container leaf row (leaves at row 0, chunk root just
+     * above the list leaf), then mix_in_length feeds the container leaf. */
+    treeLayout() {
+      const containerDepth = Math.max(1, this.depth());
+      const expand = this.listSelected();
+      const chunkDepth = expand
+        ? Math.max(1, M.buildListSubtree(this.selectedField(), this.listLength).depth)
+        : 0;
+      const containerLeafRow = expand ? chunkDepth + 1 : 0;
+      const totalRows = containerLeafRow + containerDepth;
+      return { containerDepth, expand, chunkDepth, containerLeafRow, totalRows };
+    },
+    rowY(row) {
+      const box = this.treeBox();
+      const { totalRows } = this.treeLayout();
+      return totalRows === 0 ? (box.top + box.bottom) / 2 : box.top + (row / totalRows) * (box.bottom - box.top);
+    },
+    /** Container node position (leaves at containerLeafRow, root at the bottom row). */
     gindexPos(gindex) {
       const box = this.treeBox();
-      const depth = Math.max(1, this.depth());
-      const level = Math.floor(Math.log2(gindex)); // 0=root … depth=leaves
+      const { containerDepth, containerLeafRow } = this.treeLayout();
+      const level = Math.floor(Math.log2(gindex)); // 0=root … containerDepth=leaves
       const nodesAtLevel = Math.pow(2, level);
       const pos = gindex - nodesAtLevel;
       const x = box.left + (pos + 0.5) * ((box.right - box.left) / nodesAtLevel);
-      const y = box.top + ((depth - level) / depth) * (box.bottom - box.top); // leaves top, root bottom
-      return { x, y };
+      return { x, y: this.rowY(containerLeafRow + (containerDepth - level)) };
+    },
+    /** Chunk-subtree node position above the list leaf (centered binary fan-out). */
+    chunkPos(subGindex, listLeafX, span) {
+      const { chunkDepth } = this.treeLayout();
+      const level = Math.floor(Math.log2(subGindex)); // 0=chunk root … chunkDepth=chunk leaves
+      const n = Math.pow(2, level);
+      const pos = subGindex - n;
+      const box = this.treeBox();
+      const x = util.clamp(listLeafX + (pos - (n - 1) / 2) * (span / n), box.left + 12, box.right - 12);
+      return { x, y: this.rowY(chunkDepth - level) };
     },
     structBoxes() {
       const n = this.fields().length;
@@ -159,10 +200,10 @@
       this.renderStruct(ctx);
       this.renderSerialize(ctx);
       this.renderTree(ctx);
-      // For a List/Bitlist field the right panel drills into its internal subtree
-      // (capacity-fixed height + zero padding + mix_in_length); else the proof.
-      if (this.selectedField().kind === "variable") this.renderListSubtree(ctx);
-      else this.renderProofPanel(ctx);
+      // A List/Bitlist selection expands the tree itself (renderTree draws the
+      // chunk subtree above its leaf), so it takes the full width and the proof
+      // panel is hidden; otherwise show the proof panel on the right.
+      if (!this.listSelected()) this.renderProofPanel(ctx);
     },
 
     renderStruct(ctx) {
@@ -229,7 +270,9 @@
 
     renderTree(ctx) {
       const base = this.base();
-      draw.label(ctx, `③ マークル化 (crypto/merkleization.py) — 葉 ${this.fields().length}→${base} (深さ ${this.depth()}, padding ${base - this.fields().length})`, 30, 198, colors.accent, "bold 12px ui-monospace, monospace", "left");
+      const listNote = this.listSelected()
+        ? " · List葉↑を容量木+mix_in_lengthに展開" : "";
+      draw.label(ctx, `③ マークル化 (crypto/merkleization.py) — 葉 ${this.fields().length}→${base} (深さ ${this.depth()}, padding ${base - this.fields().length})${listNote}`, 30, 198, colors.accent, "bold 12px ui-monospace, monospace", "left");
       // edges
       for (let g = 1; g < base; g++) {
         const a = this.gindexPos(g);
@@ -284,9 +327,59 @@
           draw.label(ctx, cap, pos.x, pos.y - radius - 8, isPad ? colors.textDim : role === "target" ? colors.nodeHasMessage : colors.textDim, "9px ui-monospace, monospace");
         }
       }
+      if (this.listSelected()) this.renderChunkSubtree(ctx, base);
       const rootPos = this.gindexPos(1);
       draw.label(ctx, "hash_tree_root = " + this.tree[1], rootPos.x, rootPos.y + 28, colors.prune, "bold 11px ui-monospace, monospace");
       if (this.verifyDone) draw.label(ctx, "✓ 検証成功 (再計算 root = trusted root)", rootPos.x, rootPos.y + 44, colors.nodeHasMessage, "bold 11px ui-monospace, monospace");
+    },
+
+    /** Draw the selected list field's chunk subtree above its container leaf, with a
+     *  mix_in_length edge feeding the leaf (the leaf value = the list's htr). */
+    renderChunkSubtree(ctx, base) {
+      const field = this.selectedField();
+      const sub = M.buildListSubtree(field, this.listLength);
+      const box = this.treeBox();
+      const leafPos = this.gindexPos(base + this.selectedFieldIndex);
+      const span = (box.right - box.left) * 0.5;
+      const cpos = (sg) => this.chunkPos(sg, leafPos.x, span);
+
+      // chunk-tree edges
+      for (let sg = 1; sg < sub.capacity; sg++) {
+        const a = cpos(sg);
+        for (const c of [2 * sg, 2 * sg + 1]) {
+          const b = cpos(c);
+          draw.line(ctx, a.x, a.y, b.x, b.y, colors.graft + "66", 1.3);
+        }
+      }
+      // mix_in_length: chunk root → list leaf
+      const rootP = cpos(1);
+      draw.line(ctx, rootP.x, rootP.y, leafPos.x, leafPos.y - 18, colors.ihave + "cc", 1.6, true);
+      draw.label(ctx, `mix_in_length(root, 長さ=${sub.length})`, (rootP.x + leafPos.x) / 2 + 6,
+        (rootP.y + leafPos.y) / 2, colors.ihave, "8px ui-monospace, monospace", "left");
+      // chunk-tree nodes
+      for (let sg = 1; sg <= 2 * sub.capacity - 1; sg++) {
+        const p = cpos(sg);
+        const isLeaf = sg >= sub.capacity;
+        const idx = sg - sub.capacity;
+        const isPad = isLeaf && idx >= sub.length;
+        const r = isLeaf ? 12 : 13;
+        let fill = colors.node;
+        let stroke = colors.graft;
+        if (isPad) { fill = colors.grid; stroke = colors.textDim; }
+        else if (sg === 1) { fill = "#143038"; }
+        if (isPad) {
+          ctx.save();
+          ctx.setLineDash([3, 3]);
+          draw.disc(ctx, p.x, p.y, r, fill, stroke, 1.2);
+          ctx.restore();
+        } else {
+          draw.disc(ctx, p.x, p.y, r, fill, stroke, sg === 1 ? 2 : 1.3);
+        }
+        draw.label(ctx, sub.hashes[sg] || "…", p.x, p.y - 2, isPad ? colors.textDim : colors.text, "8px ui-monospace, monospace");
+        if (isLeaf) draw.label(ctx, isPad ? "zero" : `[${idx}]`, p.x, p.y - r - 7, colors.textDim, "8px ui-monospace, monospace");
+      }
+      draw.label(ctx, `${field.type}: 容量 ${field.limit}→葉 ${sub.capacity} (高さ ${sub.depth} 固定・不足はゼロ部分木)`,
+        box.left, box.top - 8, colors.graft, "9px ui-monospace, monospace", "left");
     },
 
     renderProofPanel(ctx) {
@@ -341,88 +434,6 @@
       return steps;
     },
 
-    /** Right panel for a List/Bitlist field: its internal chunk subtree (height fixed
-     *  by the capacity, missing leaves = zero subtrees) + mix_in_length → the htr that
-     *  becomes the field's leaf in the container tree. */
-    renderListSubtree(ctx) {
-      const field = this.selectedField();
-      const sub = M.buildListSubtree(field, this.listLength);
-      const px = this.width * 0.66;
-      const py = 190;
-      const pw = this.width - px - 16;
-      const ph = this.height - py - 96;
-      if (pw < 180) return;
-
-      ctx.save();
-      draw.roundedRect(ctx, px, py, pw, ph, 8);
-      ctx.fillStyle = "#0e1420ee";
-      ctx.fill();
-      ctx.strokeStyle = colors.grid;
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.restore();
-
-      const cx = px + 12;
-      draw.label(ctx, "④ List 内部木 (mix_in_length)", cx, py + 16, colors.accent, "bold 11px ui-monospace, monospace", "left");
-      draw.label(ctx, `${field.type} — 容量 ${field.limit} → 葉 ${sub.capacity} (高さ ${sub.depth} 固定, 長さ ${sub.length})`,
-        cx, py + 32, colors.textDim, "9px ui-monospace, monospace", "left");
-      draw.label(ctx, "高さは容量で固定・不足葉はゼロ部分木 (実装は LIMIT=2^18 等)",
-        cx, py + 45, colors.textDim, "9px ui-monospace, monospace", "left");
-
-      const depth = Math.max(1, sub.depth);
-      const box = { left: px + 24, right: px + pw - 16, top: py + 64, bottom: this.height - 178 };
-      const subPos = (g) => {
-        const level = Math.floor(Math.log2(g));
-        const n = Math.pow(2, level);
-        const pos = g - n;
-        return {
-          x: box.left + (pos + 0.5) * ((box.right - box.left) / n),
-          y: box.top + ((depth - level) / depth) * (box.bottom - box.top),
-        };
-      };
-
-      for (let g = 1; g < sub.capacity; g++) {
-        const a = subPos(g);
-        for (const c of [2 * g, 2 * g + 1]) {
-          const b = subPos(c);
-          draw.line(ctx, a.x, a.y, b.x, b.y, colors.grid, 1.2);
-        }
-      }
-      for (let g = 1; g <= 2 * sub.capacity - 1; g++) {
-        const pos = subPos(g);
-        const isLeaf = g >= sub.capacity;
-        const idx = g - sub.capacity;
-        const isPad = isLeaf && idx >= sub.length;
-        const radius = isLeaf ? 12 : 13;
-        let fill = colors.node;
-        let stroke = colors.nodeStroke;
-        if (isPad) { fill = colors.grid; stroke = colors.textDim; }
-        else if (g === 1) { fill = "#1a3040"; stroke = colors.graft; }
-        if (isPad) {
-          ctx.save();
-          ctx.setLineDash([3, 3]);
-          draw.disc(ctx, pos.x, pos.y, radius, fill, stroke, 1.2);
-          ctx.restore();
-        } else {
-          draw.disc(ctx, pos.x, pos.y, radius, fill, stroke, g === 1 ? 2 : 1.3);
-        }
-        draw.label(ctx, sub.hashes[g] || "…", pos.x, pos.y - 2, isPad ? colors.textDim : colors.text, "8px ui-monospace, monospace");
-        if (isLeaf) {
-          draw.label(ctx, isPad ? "zero" : `[${idx}]`, pos.x, pos.y - radius - 7, colors.textDim, "8px ui-monospace, monospace");
-        }
-      }
-
-      // chunk root → mix_in_length → field htr (the container-tree leaf).
-      const rootPos = subPos(1);
-      draw.label(ctx, "chunk root", rootPos.x, rootPos.y + 15, colors.graft, "8px ui-monospace, monospace");
-      const mixX = px + pw / 2;
-      const mixY = this.height - 146;
-      draw.line(ctx, rootPos.x, rootPos.y + 4, mixX, mixY - 10, colors.ihave + "aa", 1.4, true);
-      draw.label(ctx, `mix_in_length(root, 長さ=${sub.length})`, mixX, mixY, colors.ihave, "9px ui-monospace, monospace");
-      draw.disc(ctx, mixX, mixY + 16, 13, "#1a3040", colors.nodeHasMessage, 2);
-      draw.label(ctx, sub.htr, mixX, mixY + 15, colors.text, "9px ui-monospace, monospace");
-      draw.label(ctx, `htr → コンテナ木 g=${this.targetGindex()} の葉`, mixX, mixY + 35, colors.nodeHasMessage, "9px ui-monospace, monospace");
-    },
 
     /* ----------------------- interaction ----------------------- */
     onMouse(type, mx, my) {
