@@ -43,16 +43,18 @@
     </main>
 
     <script src="../shared/core.js"></script>
+    <script src="js/scenes/layers.js"></script>
     <script src="js/scenes/discovery.js"></script>
     <script src="js/scenes/quic.js"></script>
     <script src="js/scenes/gossipsub.js"></script>
     <script src="js/scenes/reqresp.js"></script>
     <script src="js/scenes/lifecycle.js"></script>
     <script>
-      // Tab order follows the chapter: Discovery (5.2), QUIC (5.3),
+      // Tab order follows the chapter: Layer separation (5.1.3) frames the
+      // committee/subnet/topic/peer layers, then Discovery (5.2), QUIC (5.3),
       // Gossipsub (5.4), Request-Response (5.5), then the lifecycle capstone
       // that replays each scene's motion as one node's join -> block journey.
-      window.P2P_SCENE_ORDER = ["discovery", "quic", "gossipsub", "reqresp", "lifecycle"];
+      window.P2P_SCENE_ORDER = ["layers", "discovery", "quic", "gossipsub", "reqresp", "lifecycle"];
     </script>
     <script src="../shared/app.js"></script>
   </body>

@@ -15,12 +15,13 @@ python3 -m http.server 8000
 ```
 
 特定のシーンへ直接飛ぶには URL ハッシュを使います:
-`…/p2p/#gossipsub` / `#discovery` / `#quic` / `#reqresp` / `#lifecycle`
+`…/p2p/#layers` / `#gossipsub` / `#discovery` / `#quic` / `#reqresp` / `#lifecycle`
 
-## 5つのシーン（実装モジュールに対応）
+## 6つのシーン（実装モジュールに対応）
 
 | タブ | 実装 | 可視化する内容 |
 | --- | --- | --- |
+| レイヤー分離 | `gossipsub/` + `5.1.3` | committee / subnet / topic / peer を別レイヤーとして縦に積んで分離。subnet N ≡ topic `attestation_N`、mesh は固定の 50〜100 物理ピアの部分集合。topic を購読/解除しても物理接続は一定。64 subnet で 1M validator を捌ける時間スライス（瞬間≈488 / エポック累計≈15,625）も併示 |
 | Discovery v5 | `enr/` (discv5: 予定) | XOR 距離と反復探索（漏斗状の収束）、k-bucket。**現行 leanSpec はピア発見を ENR 解決の静的ブートストラップで行い discv5 は将来予定**。本シーンは将来機構の可視化 |
 | QUIC トランスポート | `transport/quic/` | Head-of-Line ブロッキング比較、接続確立の RTT（1-RTT、0-RTT は無効）。libp2p TLS(ALPN "libp2p" / OID 拡張)。QUIC が唯一のトランスポート |
 | Gossipsub 伝播 | `gossipsub/` | mesh の eager push、IHAVE/IWANT の lazy pull、heartbeat の GRAFT/PRUNE、重複排除。v1.2(/meshsub/1.2.0)、D=8/6/12 |
@@ -36,6 +37,7 @@ python3 -m http.server 8000
 p2p/
 ├── index.html            # タブ + キャンバス + サイドバー
 └── js/scenes/
+    ├── layers.js         # committee/subnet/topic/peer の層分離（§5.1.3）
     ├── discovery.js      # enr/ (discv5: 予定)
     ├── quic.js           # transport/quic/
     ├── gossipsub.js      # gossipsub/
